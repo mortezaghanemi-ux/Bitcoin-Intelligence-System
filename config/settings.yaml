@@ -1,0 +1,12 @@
+system:
+  name: Bitcoin-Intelligence-System
+  timezone: UTC
+  environment: development
+
+forecast:
+  enabled: true
+  horizon_days: 7
+
+trader:
+  enabled: true
+  auto_trading: false
