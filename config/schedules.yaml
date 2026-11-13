@@ -1,0 +1,43 @@
+schedules:
+  timezone: UTC
+
+  market_data:
+    enabled: true
+    interval_minutes: 5
+
+  candles:
+    enabled: true
+    timeframes: [5m, 15m, 1h, 4h]
+    collect_closed_candles_only: true
+
+  derivatives:
+    enabled: true
+    interval_minutes: 5
+
+  etf_flows:
+    enabled: true
+    interval_minutes: 60
+
+  onchain:
+    enabled: true
+    interval_minutes: 60
+
+  macro:
+    enabled: true
+    interval_minutes: 1440
+
+  forecast:
+    enabled: true
+    interval_hours: 6
+
+  trader:
+    enabled: true
+    run_after_data_validation: true
+    run_after_market_analysis: true
+
+  validation:
+    run_before_every_engine: true
+
+  history:
+    enabled: true
+    prevent_duplicate_runs: true
