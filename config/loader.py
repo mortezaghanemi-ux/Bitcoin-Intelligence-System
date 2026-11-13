@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from pathlib import Path
@@ -62,8 +63,6 @@ def _require_bool(value: Any, name: str) -> None:
 
 def _require_positive_number(value: Any, name: str) -> None:
     """Require a positive finite numeric value."""
-
-    import math
 
     if isinstance(value, bool) or not isinstance(
         value, (int, float)
@@ -225,9 +224,7 @@ def _validate_configuration(
 ) -> None:
     """Validate configuration structure and safety rules."""
 
-    # --------------------------------------------------
     # General settings
-    # --------------------------------------------------
 
     settings = _require_mapping(
         config["settings"].get("system"),
@@ -235,7 +232,6 @@ def _validate_configuration(
     )
 
     if settings.get("timezone") != "UTC":
-
         raise ConfigurationError(
             "system.timezone must be UTC."
         )
@@ -259,7 +255,6 @@ def _validate_configuration(
     }
 
     if logging_config.get("level") not in allowed_log_levels:
-
         raise ConfigurationError(
             "Invalid logging level."
         )
@@ -279,9 +274,7 @@ def _validate_configuration(
         "security.protect_api_keys",
     )
 
-    # --------------------------------------------------
     # Data source policies
-    # --------------------------------------------------
 
     sources_config = config["data_sources"]
 
@@ -291,7 +284,6 @@ def _validate_configuration(
     )
 
     if data_policy.get("timezone") != "UTC":
-
         raise ConfigurationError(
             "data_policy.timezone must be UTC."
         )
@@ -303,16 +295,13 @@ def _validate_configuration(
         "prevent_duplicate_records",
         "reject_stale_data",
     ):
-
         if key in data_policy:
-
             _require_bool(
                 data_policy[key],
                 f"data_policy.{key}",
             )
 
     if data_policy.get("preserve_raw_data") is not True:
-
         raise ConfigurationError(
             "Raw data preservation must remain enabled."
         )
@@ -320,14 +309,11 @@ def _validate_configuration(
     if data_policy.get(
         "never_store_api_keys_in_files"
     ) is not True:
-
         raise ConfigurationError(
             "API keys must never be stored in project files."
         )
 
-    # --------------------------------------------------
     # Data quality
-    # --------------------------------------------------
 
     quality = config["data_quality"]
 
@@ -337,7 +323,6 @@ def _validate_configuration(
     )
 
     if freshness.get("reject_stale_data") is not True:
-
         raise ConfigurationError(
             "Stale data rejection must remain enabled."
         )
@@ -348,20 +333,16 @@ def _validate_configuration(
     )
 
     for source, minutes in max_age.items():
-
         _require_positive_number(
             minutes,
             f"max_age_minutes.{source}",
         )
 
-    # --------------------------------------------------
     # Timeframes
-    # --------------------------------------------------
 
     timeframe_config = config["timeframes"]
 
     if timeframe_config.get("timezone") != "UTC":
-
         raise ConfigurationError(
             "timeframes.timezone must be UTC."
         )
@@ -374,7 +355,6 @@ def _validate_configuration(
     timeframe_items = timeframe_trader.get("timeframes")
 
     if not isinstance(timeframe_items, list) or not timeframe_items:
-
         raise ConfigurationError(
             "timeframes.trader.timeframes must be a non-empty list."
         )
@@ -391,13 +371,11 @@ def _validate_configuration(
         name = item.get("name")
 
         if not isinstance(name, str) or not name.strip():
-
             raise ConfigurationError(
                 "Every timeframe must have a valid name."
             )
 
         if name in timeframe_names:
-
             raise ConfigurationError(
                 f"Duplicate timeframe: {name}"
             )
@@ -414,9 +392,7 @@ def _validate_configuration(
             f"timeframes.{name}.seconds",
         )
 
-    # --------------------------------------------------
     # Indicators
-    # --------------------------------------------------
 
     indicators = _require_mapping(
         config["indicators"].get("indicators"),
@@ -440,15 +416,12 @@ def _validate_configuration(
         "prevent_lookahead_bias",
         "use_validated_data_only",
     ):
-
         _require_bool(
             indicator_rules.get(key),
             f"indicators.rules.{key}",
         )
 
-    # --------------------------------------------------
     # Forecast
-    # --------------------------------------------------
 
     forecast = _require_mapping(
         config["forecast"].get("forecast"),
@@ -456,7 +429,6 @@ def _validate_configuration(
     )
 
     if forecast.get("horizon_days") != 7:
-
         raise ConfigurationError(
             "Forecast horizon must be 7 days."
         )
@@ -473,15 +445,12 @@ def _validate_configuration(
         "use_closed_candles_only",
         "preserve_historical_forecasts",
     ):
-
         _require_bool(
             forecast_rules.get(key),
             f"forecast.rules.{key}",
         )
 
-    # --------------------------------------------------
     # Trader safety
-    # --------------------------------------------------
 
     trader = _require_mapping(
         config["trader"].get("trader"),
@@ -494,19 +463,16 @@ def _validate_configuration(
     )
 
     if execution.get("auto_trading") is not False:
-
         raise ConfigurationError(
             "Automatic trading must remain disabled."
         )
 
     if execution.get("exchange_connection") is not False:
-
         raise ConfigurationError(
             "Exchange connections must remain disabled."
         )
 
     if execution.get("manual_review_only") is not True:
-
         raise ConfigurationError(
             "Signals must require manual review."
         )
@@ -514,30 +480,23 @@ def _validate_configuration(
     if execution.get(
         "exchange_api_keys_required"
     ) is not False:
-
         raise ConfigurationError(
             "Exchange API keys must not be required."
         )
 
     trader_timeframes = trader.get("timeframes")
 
-    if (
-        not isinstance(trader_timeframes, list)
-        or not trader_timeframes
-    ):
-
+    if not isinstance(trader_timeframes, list) or not trader_timeframes:
         raise ConfigurationError(
             "Trader timeframes must be a non-empty list."
         )
 
     if len(trader_timeframes) != len(set(trader_timeframes)):
-
         raise ConfigurationError(
             "Duplicate trader timeframes detected."
         )
 
     if set(trader_timeframes) != set(timeframe_names):
-
         raise ConfigurationError(
             "Trader timeframes do not match timeframe configuration."
         )
@@ -550,7 +509,6 @@ def _validate_configuration(
     allowed_signals = signals.get("allowed")
 
     if not isinstance(allowed_signals, list):
-
         raise ConfigurationError(
             "Trader allowed signals must be a list."
         )
@@ -562,7 +520,6 @@ def _validate_configuration(
     }
 
     if not required_signals.issubset(set(allowed_signals)):
-
         raise ConfigurationError(
             "LONG, SHORT and NO_TRADE must be enabled."
         )
@@ -579,14 +536,12 @@ def _validate_configuration(
         "multiple_take_profit_targets",
         "require_risk_reward",
     ):
-
         _require_bool(
             position.get(key),
             f"trader.position.{key}",
         )
 
     if position.get("require_stop_loss") is not True:
-
         raise ConfigurationError(
             "Every trading signal must require a stop loss."
         )
@@ -606,9 +561,7 @@ def _validate_configuration(
         "trader.risk.maximum_leverage",
     )
 
-    # --------------------------------------------------
     # Scheduling
-    # --------------------------------------------------
 
     schedules = _require_mapping(
         config["schedules"].get("schedules"),
@@ -616,7 +569,6 @@ def _validate_configuration(
     )
 
     if schedules.get("timezone") != "UTC":
-
         raise ConfigurationError(
             "schedules.timezone must be UTC."
         )
@@ -631,7 +583,6 @@ def _validate_configuration(
         "sequential_dependencies",
         "stop_on_critical_error",
     ):
-
         _require_bool(
             schedule_execution.get(key),
             f"schedules.execution.{key}",
@@ -644,7 +595,6 @@ def _validate_configuration(
         or not isinstance(retries, int)
         or retries < 0
     ):
-
         raise ConfigurationError(
             "maximum_retries must be a non-negative integer."
         )
@@ -654,16 +604,13 @@ def main() -> int:
     """Validate configuration from the command line."""
 
     try:
-
         configs = load_config()
 
     except ConfigurationError as exc:
-
         print(
             f"CONFIGURATION ERROR: {exc}",
             file=sys.stderr,
         )
-
         return 1
 
     print("CONFIGURATION OK")
@@ -671,7 +618,6 @@ def main() -> int:
     print(f"Loaded files: {len(configs)}")
 
     for name in configs:
-
         print(f"  - {name}.yaml")
 
     print("Safety checks: PASSED")
@@ -680,5 +626,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-
     raise SystemExit(main())
