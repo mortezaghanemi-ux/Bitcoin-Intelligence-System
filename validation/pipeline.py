@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -22,7 +22,36 @@ DEFAULT_REPORT_PATH = (
 
 
 class ValidationPipelineError(RuntimeError):
-    pass
+    """Raised when the candle validation pipeline fails."""
+
+
+def _is_utc_datetime(value):
+    """Return True only for timezone-aware UTC datetimes."""
+
+    if not isinstance(value, datetime):
+        return False
+
+    try:
+        return (
+            value.tzinfo is not None
+            and value.utcoffset() == timedelta(0)
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _normalize_source(value):
+    """Convert source values into safe, consistent labels."""
+
+    try:
+        if pd.isna(value):
+            return "UNKNOWN"
+    except (TypeError, ValueError):
+        pass
+
+    normalized = str(value).strip()
+
+    return normalized or "UNKNOWN"
 
 
 def run_candle_validation(
@@ -34,23 +63,37 @@ def run_candle_validation(
 ):
     """Validate candles and persist source-specific reports."""
 
+    # Input validation
+
     if not isinstance(data, pd.DataFrame):
-        raise TypeError("data must be a pandas DataFrame")
+        raise TypeError(
+            "data must be a pandas DataFrame"
+        )
 
     if data.empty:
         raise ValidationPipelineError(
             "Cannot validate an empty candle dataset."
         )
 
-    checked_at = validation_time or datetime.now(timezone.utc)
+    # Validation timestamp
 
-    if (
-        checked_at.tzinfo is None
-        or checked_at.utcoffset().total_seconds() != 0
-    ):
-        raise ValueError("validation_time must be UTC")
+    checked_at = (
+        validation_time
+        if validation_time is not None
+        else datetime.now(timezone.utc)
+    )
+
+    if not _is_utc_datetime(checked_at):
+        raise ValueError(
+            "validation_time must be a timezone-aware UTC datetime"
+        )
+
+    checked_at = checked_at.astimezone(timezone.utc)
 
     try:
+
+        # Validate candle records
+
         accepted, rejected, validation_result = validate_candles(
             data,
             validation_time=checked_at,
@@ -58,26 +101,38 @@ def run_candle_validation(
             require_closed=True,
         )
 
-        report_sources = data["source"].fillna("").astype(str)
+        # Normalize original source labels
 
-        report_sources = report_sources.map(
-            lambda value: value.strip() or "UNKNOWN"
+        report_sources = data["source"].map(
+            _normalize_source
+        )
+
+        accepted_sources = accepted["source"].map(
+            _normalize_source
+        )
+
+        rejected_sources = rejected["source"].map(
+            _normalize_source
         )
 
         report_rows = []
+
+        # Create one report per source
 
         for source in sorted(report_sources.unique()):
 
             source_mask = report_sources == source
 
-            source_accepted = accepted[
-                accepted["source"].fillna("").astype(str).str.strip()
-                .replace("", "UNKNOWN") == source
+            accepted_mask = accepted_sources == source
+
+            rejected_mask = rejected_sources == source
+
+            source_accepted = accepted.loc[
+                accepted_mask
             ]
 
-            source_rejected = rejected[
-                rejected["source"].fillna("").astype(str).str.strip()
-                .replace("", "UNKNOWN") == source
+            source_rejected = rejected.loc[
+                rejected_mask
             ]
 
             errors = set()
@@ -90,7 +145,7 @@ def run_candle_validation(
 
                     errors.update(
                         item
-                        for item in message.split(";")
+                        for item in str(message).split(";")
                         if item
                     )
 
