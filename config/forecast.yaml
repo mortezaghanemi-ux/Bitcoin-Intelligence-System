@@ -8,6 +8,7 @@ forecast:
     neutral_probability: true
     confidence_score: true
     market_condition: true
+    influencing_factors: true
 
   evaluation:
     enabled: true
@@ -15,9 +16,18 @@ forecast:
     calculate_brier_score: true
     calculate_log_loss: true
     track_directional_accuracy: true
+    compare_with_actual_market_outcome: true
+    evaluate_after_horizon_completion: true
+
+  history:
+    preserve_all_forecasts: true
+    record_generation_timestamp: true
+    prevent_duplicate_records: true
+    allow_historical_overwrite: false
 
   rules:
     probabilities_must_total_100: true
     use_validated_data_only: true
     prevent_lookahead_bias: true
+    use_closed_candles_only: true
     preserve_historical_forecasts: true
