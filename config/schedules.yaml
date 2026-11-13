@@ -26,18 +26,36 @@ schedules:
     enabled: true
     interval_minutes: 1440
 
+  validation:
+    enabled: true
+    run_after_collection: true
+    run_before_every_engine: true
+
+  market_analysis:
+    enabled: true
+    run_after_validation: true
+
   forecast:
     enabled: true
     interval_hours: 6
+    run_after_validation: true
 
   trader:
     enabled: true
     run_after_data_validation: true
     run_after_market_analysis: true
+    require_closed_candles: true
 
-  validation:
-    run_before_every_engine: true
+  execution:
+    prevent_overlapping_runs: true
+    sequential_dependencies: true
+    stop_on_critical_error: true
+    allow_retry_on_failure: true
+    maximum_retries: 2
 
   history:
     enabled: true
+    record_execution_status: true
+    record_execution_timestamps: true
     prevent_duplicate_runs: true
+    preserve_execution_history: true
