@@ -1,0 +1,54 @@
+indicators:
+  enabled: true
+
+  trend:
+    ema:
+      enabled: true
+      periods: [20, 50, 100, 200]
+
+    sma:
+      enabled: true
+      periods: [20, 50, 100, 200]
+
+    adx:
+      enabled: true
+      period: 14
+
+  momentum:
+    rsi:
+      enabled: true
+      period: 14
+
+    macd:
+      enabled: true
+      fast: 12
+      slow: 26
+      signal: 9
+
+    stochastic:
+      enabled: true
+      k_period: 14
+      d_period: 3
+
+  volatility:
+    atr:
+      enabled: true
+      period: 14
+
+    bollinger_bands:
+      enabled: true
+      period: 20
+      standard_deviation: 2
+
+  volume:
+    volume_sma:
+      enabled: true
+      period: 20
+
+    obv:
+      enabled: true
+
+  rules:
+    use_closed_candles_only: true
+    calculate_for_all_timeframes: true
+    preserve_indicator_history: true
