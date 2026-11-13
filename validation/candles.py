@@ -72,10 +72,7 @@ def validate_candles(
 ):
 
     if not isinstance(data, pd.DataFrame):
-
-        raise TypeError(
-            "data must be a pandas DataFrame"
-        )
+        raise TypeError("data must be a pandas DataFrame")
 
     checked_at = (
         validation_time
@@ -83,7 +80,6 @@ def validate_candles(
     )
 
     if not _is_utc_datetime(checked_at):
-
         raise ValueError(
             "validation_time must be a timezone-aware UTC datetime"
         )
@@ -96,7 +92,6 @@ def validate_candles(
             or not math.isfinite(max_age_minutes)
             or max_age_minutes < 0
         ):
-
             raise ValueError(
                 "max_age_minutes must be a finite non-negative number"
             )
@@ -108,7 +103,6 @@ def validate_candles(
     ]
 
     if missing:
-
         raise ValueError(
             "Missing required columns: "
             + ", ".join(missing)
@@ -129,10 +123,7 @@ def validate_candles(
 
     # Timestamp validation
 
-    for column in (
-        "open_time",
-        "close_time",
-    ):
+    for column in ("open_time", "close_time"):
 
         parsed = [
             _parse_utc_timestamp(value)
@@ -144,7 +135,6 @@ def validate_candles(
         for index, timestamp in enumerate(parsed):
 
             if timestamp is None:
-
                 errors[index].append(
                     f"{column}_must_be_valid_utc"
                 )
@@ -173,25 +163,18 @@ def validate_candles(
                 )
 
                 normalized.append(float("nan"))
-
                 continue
 
             try:
-
                 number = float(value)
 
-            except (
-                TypeError,
-                ValueError,
-                OverflowError,
-            ):
+            except (TypeError, ValueError, OverflowError):
 
                 errors[index].append(
                     f"{column}_must_be_finite_numeric"
                 )
 
                 normalized.append(float("nan"))
-
                 continue
 
             if not math.isfinite(number):
@@ -203,12 +186,11 @@ def validate_candles(
                 normalized.append(float("nan"))
 
             else:
-
                 normalized.append(number)
 
         valid[column] = normalized
 
-    # OHLC and source validation
+    # OHLC validation
 
     for index, row in valid.iterrows():
 
@@ -218,26 +200,16 @@ def validate_candles(
             pd.isna(source)
             or not str(source).strip()
         ):
-
-            errors[index].append(
-                "source_required"
-            )
+            errors[index].append("source_required")
 
         prices = [
             row[column]
             for column in PRICE_COLUMNS
         ]
 
-        if all(
-            pd.notna(value)
-            for value in prices
-        ):
+        if all(pd.notna(value) for value in prices):
 
-            if any(
-                value <= 0
-                for value in prices
-            ):
-
+            if any(value <= 0 for value in prices):
                 errors[index].append(
                     "prices_must_be_positive"
                 )
@@ -247,7 +219,6 @@ def validate_candles(
                 row["close"],
                 row["low"],
             ):
-
                 errors[index].append(
                     "invalid_high_price"
                 )
@@ -257,7 +228,6 @@ def validate_candles(
                 row["close"],
                 row["high"],
             ):
-
                 errors[index].append(
                     "invalid_low_price"
                 )
@@ -266,7 +236,6 @@ def validate_candles(
             pd.notna(row["volume"])
             and row["volume"] < 0
         ):
-
             errors[index].append(
                 "volume_must_be_non_negative"
             )
@@ -274,22 +243,14 @@ def validate_candles(
         opened = row["open_time"]
         closed = row["close_time"]
 
-        if (
-            opened is not None
-            and closed is not None
-        ):
+        if opened is not None and closed is not None:
 
             if closed <= opened:
-
                 errors[index].append(
                     "close_time_must_follow_open_time"
                 )
 
-            if (
-                require_closed
-                and closed > checked_at_ts
-            ):
-
+            if require_closed and closed > checked_at_ts:
                 errors[index].append(
                     "candle_not_closed"
                 )
@@ -301,7 +262,6 @@ def validate_candles(
                 ).total_seconds() / 60
 
                 if age_minutes > max_age_minutes:
-
                     errors[index].append(
                         "stale_candle"
                     )
@@ -309,19 +269,13 @@ def validate_candles(
     # Duplicate detection
 
     duplicate_mask = valid.duplicated(
-        subset=[
-            "open_time",
-            "source",
-        ],
+        subset=["open_time", "source"],
         keep="first",
     )
 
-    for index, is_duplicate in enumerate(
-        duplicate_mask
-    ):
+    for index, is_duplicate in enumerate(duplicate_mask):
 
         if is_duplicate:
-
             errors[index].append(
                 "duplicate_candle"
             )
@@ -344,49 +298,32 @@ def validate_candles(
         valid.loc[
             [not rejected for rejected in rejected_mask]
         ]
-        .drop(
-            columns=["validation_errors"]
-        )
+        .drop(columns=["validation_errors"])
         .reset_index(drop=True)
     )
 
     rejected = (
-        valid.loc[
-            rejected_mask
-        ]
+        valid.loc[rejected_mask]
         .reset_index(drop=True)
     )
 
     # Validation report
 
     report = {
-
         "dataset": "candles",
-
-        "validation_timestamp": (
-            checked_at_ts.isoformat()
-        ),
-
+        "validation_timestamp": checked_at_ts.isoformat(),
         "records_checked": len(valid),
-
         "valid_records": len(accepted),
-
         "rejected_records": len(rejected),
-
         "status": (
             "PASS"
             if rejected.empty
             else "FAIL"
         ),
-
         "errors": sum(
             len(row_errors)
             for row_errors in errors
         ),
     }
 
-    return (
-        accepted,
-        rejected,
-        report,
-    )
+    return accepted, rejected, report
