@@ -1,0 +1,23 @@
+forecast:
+  enabled: true
+  horizon_days: 7
+
+  outputs:
+    bullish_probability: true
+    bearish_probability: true
+    neutral_probability: true
+    confidence_score: true
+    market_condition: true
+
+  evaluation:
+    enabled: true
+    preserve_forecast_history: true
+    calculate_brier_score: true
+    calculate_log_loss: true
+    track_directional_accuracy: true
+
+  rules:
+    probabilities_must_total_100: true
+    use_validated_data_only: true
+    prevent_lookahead_bias: true
+    preserve_historical_forecasts: true
