@@ -1,20 +1,54 @@
-market:
-  primary: kraken
-  fallback: coingecko
+sources:
 
-derivatives:
-  primary: kraken_futures
+  market:
+    enabled: true
+    primary: kraken
+    fallback:
+      - coingecko
 
-macro:
-  primary: fred
+  derivatives:
+    enabled: true
+    primary: kraken_futures
 
-etf:
-  enabled: true
+  macro:
+    enabled: true
+    primary: fred
 
-onchain:
-  primary: mempool_space
+  etf:
+    enabled: true
+    primary: null
+    status: provider_selection_required
+
+  onchain:
+    enabled: true
+    primary: mempool_space
+
+  providers:
+
+    kraken:
+      enabled: true
+      credentials_required: false
+
+    coingecko:
+      enabled: true
+      credentials_env: COINGECKO_API_KEY
+
+    kraken_futures:
+      enabled: true
+      credentials_required: false
+
+    fred:
+      enabled: true
+      credentials_env: FRED_API_KEY
+
+    mempool_space:
+      enabled: true
+      credentials_required: false
 
 data_policy:
   timezone: UTC
   reject_stale_data: true
   preserve_raw_data: true
+  validate_before_processing: true
+  prevent_duplicate_records: true
+  never_store_api_keys_in_files: true
