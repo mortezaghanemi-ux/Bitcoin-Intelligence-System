@@ -23,7 +23,7 @@ jobs:
     name: Run Python Tests
     runs-on: ubuntu-latest
 
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -45,5 +45,18 @@ jobs:
       - name: Check Python syntax
         run: python -m compileall -q config validation tests
 
-      - name: Run all tests
-        run: python -m pytest -v
+      - name: Run tests with coverage
+        run: |
+          python -m pytest -v \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-report
+          path: coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
