@@ -1,12 +1,17 @@
 system:
   name: Bitcoin-Intelligence-System
+  version: 1.0.0
   timezone: UTC
   environment: development
 
-forecast:
-  enabled: true
-  horizon_days: 7
+  logging:
+    enabled: true
+    level: INFO
 
-trader:
-  enabled: true
-  auto_trading: false
+  security:
+    require_validated_data: true
+    protect_api_keys: true
+
+  execution:
+    allow_parallel_workflows: false
+    stop_on_critical_error: true
