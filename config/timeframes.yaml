@@ -1,3 +1,5 @@
+timezone: UTC
+
 trader:
   timeframes:
     - name: 5m
@@ -17,9 +19,14 @@ trader:
       seconds: 14400
 
 forecast:
-  primary_timeframe: 1d
+  primary_timeframe:
+    name: 1d
+    minutes: 1440
+    seconds: 86400
+
   horizon_days: 7
 
 rules:
   use_closed_candles_only: true
-  timezone: UTC
+  prevent_lookahead_bias: true
+  align_timestamps_to_utc: true
