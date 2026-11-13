@@ -1,0 +1,41 @@
+trader:
+  enabled: true
+
+  execution:
+    manual_review_only: true
+    auto_trading: false
+    exchange_connection: false
+    exchange_api_keys_required: false
+
+  timeframes:
+    - 5m
+    - 15m
+    - 1h
+    - 4h
+
+  signals:
+    allowed:
+      - LONG
+      - SHORT
+      - NO_TRADE
+
+    require_closed_candles: true
+    use_validated_data_only: true
+    prevent_lookahead_bias: true
+
+  position:
+    require_entry_range: true
+    require_stop_loss: true
+    require_take_profit: true
+    require_risk_reward: true
+
+  risk:
+    enabled: true
+    maximum_leverage: 2
+    calculate_position_size: true
+    calculate_liquidation_price: true
+
+  history:
+    preserve_all_signals: true
+    preserve_rejected_signals: true
+    prevent_duplicate_records: true
