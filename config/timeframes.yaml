@@ -1,0 +1,25 @@
+trader:
+  timeframes:
+    - name: 5m
+      minutes: 5
+      seconds: 300
+
+    - name: 15m
+      minutes: 15
+      seconds: 900
+
+    - name: 1h
+      minutes: 60
+      seconds: 3600
+
+    - name: 4h
+      minutes: 240
+      seconds: 14400
+
+forecast:
+  primary_timeframe: 1d
+  horizon_days: 7
+
+rules:
+  use_closed_candles_only: true
+  timezone: UTC
