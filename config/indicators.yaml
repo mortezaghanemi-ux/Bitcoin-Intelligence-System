@@ -14,6 +14,17 @@ indicators:
       enabled: true
       period: 14
 
+    ichimoku:
+      enabled: true
+      tenkan: 9
+      kijun: 26
+      senkou_b: 52
+
+    parabolic_sar:
+      enabled: true
+      step: 0.02
+      maximum: 0.2
+
   momentum:
     rsi:
       enabled: true
@@ -29,6 +40,18 @@ indicators:
       enabled: true
       k_period: 14
       d_period: 3
+
+    cci:
+      enabled: true
+      period: 20
+
+    williams_r:
+      enabled: true
+      period: 14
+
+    roc:
+      enabled: true
+      period: 12
 
   volatility:
     atr:
@@ -48,7 +71,16 @@ indicators:
     obv:
       enabled: true
 
+    mfi:
+      enabled: true
+      period: 14
+
+    vwap:
+      enabled: true
+
   rules:
     use_closed_candles_only: true
     calculate_for_all_timeframes: true
     preserve_indicator_history: true
+    prevent_lookahead_bias: true
+    use_validated_data_only: true
