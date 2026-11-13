@@ -5,11 +5,22 @@ validation:
   reject_invalid_prices: true
   verify_ohlc_consistency: true
   require_closed_candles: true
+  validate_numeric_ranges: true
+  validate_indicator_values: true
+  validate_derivatives_data: true
 
 freshness:
   enabled: true
   source_specific_limits: true
   reject_stale_data: true
+
+  max_age_minutes:
+    market: 15
+    candles: 15
+    derivatives: 15
+    etf: 4320
+    onchain: 180
+    macro: 2880
 
 history:
   preserve_raw_data: true
@@ -20,3 +31,10 @@ failure_policy:
   stop_dependent_workflows: true
   record_validation_errors: true
   allow_invalid_data_for_analysis: false
+
+quality_report:
+  enabled: true
+  preserve_history: true
+  include_source_status: true
+  include_freshness_status: true
+  include_validation_errors: true
