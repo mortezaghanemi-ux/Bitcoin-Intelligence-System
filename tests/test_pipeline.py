@@ -33,6 +33,10 @@ def candle(
     }
 
 
+# --------------------------------------------------
+# Basic pipeline tests
+# --------------------------------------------------
+
 def test_pipeline_accepts_valid_candles_and_writes_report(tmp_path):
 
     data = pd.DataFrame([candle()])
@@ -92,7 +96,6 @@ def test_pipeline_reports_each_source_independently(tmp_path):
 
     assert reports.loc["coinbase", "valid_records"] == 0
     assert reports.loc["coinbase", "rejected_records"] == 1
-
     assert reports.loc["coinbase", "status"] == "FAIL"
 
 
@@ -109,6 +112,10 @@ def test_pipeline_does_not_modify_input_dataframe(tmp_path):
 
     pd.testing.assert_frame_equal(data, original)
 
+
+# --------------------------------------------------
+# Input validation tests
+# --------------------------------------------------
 
 def test_pipeline_rejects_empty_dataset():
 
@@ -130,6 +137,16 @@ def test_pipeline_rejects_empty_dataset():
 
         run_candle_validation(
             data,
+            validation_time=CHECK_TIME,
+        )
+
+
+def test_pipeline_rejects_non_dataframe():
+
+    with pytest.raises(TypeError):
+
+        run_candle_validation(
+            [{"open": 95000}],
             validation_time=CHECK_TIME,
         )
 
@@ -172,10 +189,70 @@ def test_pipeline_rejects_non_utc_validation_time(tmp_path):
         )
 
 
-def test_pipeline_prevents_duplicate_report_for_same_run(tmp_path):
+def test_pipeline_rejects_invalid_max_age(tmp_path):
 
     data = pd.DataFrame([candle()])
 
+    with pytest.raises(
+        ValidationPipelineError,
+        match="max_age_minutes",
+    ):
+
+        run_candle_validation(
+            data,
+            report_path=tmp_path / "reports.csv",
+            validation_time=CHECK_TIME,
+            max_age_minutes=-1,
+        )
+
+
+# --------------------------------------------------
+# Source normalization tests
+# --------------------------------------------------
+
+def test_pipeline_handles_missing_source(tmp_path):
+
+    item = candle()
+    item["source"] = None
+
+    data = pd.DataFrame([item])
+
+    result = run_candle_validation(
+        data,
+        report_path=tmp_path / "reports.csv",
+        validation_time=CHECK_TIME,
+    )
+
+    assert result["status"] == "FAIL"
+    assert len(result["rejected"]) == 1
+    assert len(result["reports"]) == 1
+    assert result["reports"][0]["source"] == "UNKNOWN"
+
+
+def test_pipeline_handles_blank_source(tmp_path):
+
+    item = candle()
+    item["source"] = "   "
+
+    data = pd.DataFrame([item])
+
+    result = run_candle_validation(
+        data,
+        report_path=tmp_path / "reports.csv",
+        validation_time=CHECK_TIME,
+    )
+
+    assert result["status"] == "FAIL"
+    assert result["reports"][0]["source"] == "UNKNOWN"
+
+
+# --------------------------------------------------
+# Report persistence tests
+# --------------------------------------------------
+
+def test_pipeline_prevents_duplicate_report_for_same_run(tmp_path):
+
+    data = pd.DataFrame([candle()])
     report_path = tmp_path / "reports.csv"
 
     run_candle_validation(
@@ -194,3 +271,75 @@ def test_pipeline_prevents_duplicate_report_for_same_run(tmp_path):
             report_path=report_path,
             validation_time=CHECK_TIME,
         )
+
+
+def test_pipeline_preserves_report_history(tmp_path):
+
+    data = pd.DataFrame([candle()])
+    report_path = tmp_path / "reports.csv"
+
+    first_time = CHECK_TIME
+
+    second_time = datetime(
+        2026, 11, 13, 13, 0, tzinfo=timezone.utc
+    )
+
+    run_candle_validation(
+        data,
+        report_path=report_path,
+        validation_time=first_time,
+    )
+
+    run_candle_validation(
+        data,
+        report_path=report_path,
+        validation_time=second_time,
+    )
+
+    reports = pd.read_csv(report_path)
+
+    assert len(reports) == 2
+    assert reports["source"].tolist() == [
+        "kraken",
+        "kraken",
+    ]
+
+
+def test_pipeline_report_counts_are_consistent(tmp_path):
+
+    data = pd.DataFrame([
+        candle(source="kraken"),
+        candle(
+            source="coinbase",
+            high=93000,
+            open_time="2026-11-13T11:55:00+00:00",
+        ),
+    ])
+
+    result = run_candle_validation(
+        data,
+        report_path=tmp_path / "reports.csv",
+        validation_time=CHECK_TIME,
+    )
+
+    total_checked = sum(
+        int(report["records_checked"])
+        for report in result["reports"]
+    )
+
+    total_valid = sum(
+        int(report["valid_records"])
+        for report in result["reports"]
+    )
+
+    total_rejected = sum(
+        int(report["rejected_records"])
+        for report in result["reports"]
+    )
+
+    assert total_checked == len(data)
+
+    assert (
+        total_valid + total_rejected
+        == total_checked
+    )
