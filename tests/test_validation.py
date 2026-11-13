@@ -1,7 +1,7 @@
 """Automated tests for Bitcoin data validation."""
 
 import csv
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pandas as pd
 import pytest
@@ -22,7 +22,6 @@ CHECK_TIME = datetime(
 
 
 def valid_candle():
-
     return {
         "open_time": "2026-11-13T11:00:00+00:00",
         "close_time": "2026-11-13T11:05:00+00:00",
@@ -34,6 +33,10 @@ def valid_candle():
         "source": "kraken",
     }
 
+
+# --------------------------------------------------
+# Candle validation tests
+# --------------------------------------------------
 
 def test_valid_candle():
 
@@ -59,6 +62,7 @@ def test_invalid_high_price():
 
     assert len(accepted) == 0
     assert len(rejected) == 1
+
     assert "invalid_high_price" in rejected.iloc[0][
         "validation_errors"
     ]
@@ -103,6 +107,7 @@ def test_unclosed_candle():
     )
 
     assert len(accepted) == 0
+
     assert "candle_not_closed" in rejected.iloc[0][
         "validation_errors"
     ]
@@ -138,6 +143,7 @@ def test_duplicate_candles():
 
     assert len(accepted) == 1
     assert len(rejected) == 1
+
     assert "duplicate_candle" in rejected.iloc[0][
         "validation_errors"
     ]
@@ -154,6 +160,7 @@ def test_stale_candle():
     )
 
     assert len(accepted) == 0
+
     assert "stale_candle" in rejected.iloc[0][
         "validation_errors"
     ]
@@ -180,6 +187,73 @@ def test_non_utc_validation_time():
             ),
         )
 
+
+# --------------------------------------------------
+# Numeric validation tests
+# --------------------------------------------------
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ],
+)
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        True,
+    ],
+)
+def test_invalid_numeric_values(column, bad_value):
+
+    candle = valid_candle()
+    candle[column] = bad_value
+
+    accepted, rejected, report = validate_candles(
+        pd.DataFrame([candle]),
+        validation_time=CHECK_TIME,
+    )
+
+    assert len(accepted) == 0
+    assert len(rejected) == 1
+
+    assert (
+        f"{column}_must_be_finite_numeric"
+        in rejected.iloc[0]["validation_errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_age",
+    [
+        -1,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        True,
+    ],
+)
+def test_invalid_max_age_minutes(bad_age):
+
+    with pytest.raises(ValueError):
+
+        validate_candles(
+            pd.DataFrame([valid_candle()]),
+            validation_time=CHECK_TIME,
+            max_age_minutes=bad_age,
+        )
+
+
+# --------------------------------------------------
+# Validation report tests
+# --------------------------------------------------
 
 def test_report_creation():
 
