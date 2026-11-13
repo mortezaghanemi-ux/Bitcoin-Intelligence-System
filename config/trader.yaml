@@ -22,20 +22,39 @@ trader:
     require_closed_candles: true
     use_validated_data_only: true
     prevent_lookahead_bias: true
+    prevent_duplicate_signals: true
+
+    confidence:
+      enabled: true
+      minimum_threshold: 60
 
   position:
     require_entry_range: true
     require_stop_loss: true
     require_take_profit: true
+    multiple_take_profit_targets: true
     require_risk_reward: true
+    minimum_risk_reward: 1.5
 
   risk:
     enabled: true
     maximum_leverage: 2
     calculate_position_size: true
     calculate_liquidation_price: true
+    require_risk_calculation: true
 
   history:
     preserve_all_signals: true
     preserve_rejected_signals: true
+    preserve_signal_reasons: true
     prevent_duplicate_records: true
+    allow_historical_overwrite: false
+
+  output:
+    include_signal_timestamp: true
+    include_entry_range: true
+    include_stop_loss: true
+    include_take_profit_levels: true
+    include_risk_reward: true
+    include_confidence: true
+    include_analysis_reasons: true
