@@ -120,8 +120,17 @@ def get_analysis_time(data):
 def analyze(data, **kwargs):
     """Run analysis with common test parameters."""
 
+    # Handle intentionally missing close_time columns.
+    # This allows the production validator to reject
+    # missing columns instead of the test helper failing first.
+
+    if "close_time" in data.columns:
+        analysis_time = get_analysis_time(data)
+    else:
+        analysis_time = START + timedelta(days=1)
+
     parameters = {
-        "analysis_time": get_analysis_time(data),
+        "analysis_time": analysis_time,
     }
 
     parameters.update(kwargs)
