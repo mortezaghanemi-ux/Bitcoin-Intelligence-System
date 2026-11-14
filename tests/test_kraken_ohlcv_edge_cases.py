@@ -69,10 +69,7 @@ def collection_time():
     )
 
 
-def mock_kraken(
-    monkeypatch,
-    payload,
-):
+def mock_kraken(monkeypatch, payload):
     """Replace the real HTTP request."""
 
     monkeypatch.setattr(
@@ -300,9 +297,13 @@ def test_does_not_overwrite_existing_history(
         encoding="utf-8",
     )
 
+    # First candle: already exists in history.
+    # Second candle: new and closed.
+    # Third candle: currently forming and must be ignored.
     candles = [
         make_candle(1767225300),
         make_candle(1767225600),
+        make_candle(1767225900),
     ]
 
     mock_kraken(
