@@ -1,4 +1,3 @@
-
 """Bitcoin market regime detection."""
 
 from __future__ import annotations
