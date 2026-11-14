@@ -457,7 +457,7 @@ def test_validation_rejects_non_utc_schedule_timezone():
 
 def test_validation_rejects_api_keys_storage_enabled():
     config = load_config()
-    config["settings"]["data_policy"][
+    config["data_sources"]["data_policy"][
         "never_store_api_keys_in_files"
     ] = False
 
