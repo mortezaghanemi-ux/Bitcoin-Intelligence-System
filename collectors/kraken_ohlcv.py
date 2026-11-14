@@ -177,7 +177,7 @@ def collect_kraken_ohlcv(
 
     Original provider candle values are preserved.
 
-    Returns only newly stored closed candles.
+    Only newly stored closed candles are returned.
     """
 
     pair = _validate_pair(pair)
@@ -212,6 +212,7 @@ def collect_kraken_ohlcv(
         )
 
         response.raise_for_status()
+
         payload = response.json()
 
     except requests.RequestException as exc:
@@ -254,7 +255,7 @@ def collect_kraken_ohlcv(
         return []
 
     # Kraken includes the currently forming candle
-    # as the final entry. It must not be stored.
+    # as the final entry. It must never be stored.
     closed_candles = candles[:-1]
 
     destination = Path(
@@ -297,6 +298,7 @@ def collect_kraken_ohlcv(
 
         open_iso = _iso_utc(open_time)
 
+        # Prevent duplicate historical candles.
         if open_iso in existing:
             continue
 
@@ -310,22 +312,24 @@ def collect_kraken_ohlcv(
             "pair": pair,
             "timeframe": timeframe,
 
+            # Standard timestamps.
             "open_time": open_iso,
             "close_time": _iso_utc(close_time),
             "collected_at": _iso_utc(checked_at),
 
-            # Standard OHLCV fields for validation.
+            # Standard OHLCV fields.
             "open": candle[1],
             "high": candle[2],
             "low": candle[3],
             "close": candle[4],
             "volume": candle[6],
 
-            # Preserve the original provider response.
+            # Preserve original provider data.
             "provider_candle": list(candle),
         }
 
         new_records.append(record)
+
         existing.add(open_iso)
 
     if not new_records:
@@ -343,6 +347,7 @@ def collect_kraken_ohlcv(
         ) as file:
 
             for record in new_records:
+
                 file.write(
                     json.dumps(
                         record,
