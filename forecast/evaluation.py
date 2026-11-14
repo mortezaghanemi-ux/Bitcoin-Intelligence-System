@@ -1,4 +1,3 @@
-
 """Bitcoin forecast evaluation engine."""
 
 from __future__ import annotations
