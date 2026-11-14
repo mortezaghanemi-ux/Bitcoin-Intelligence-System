@@ -118,6 +118,11 @@ def _load_existing_timestamps(path: Path) -> set[str]:
                         f"Invalid JSONL record at line {line_number}."
                     ) from exc
 
+                if not isinstance(record, dict):
+                    raise KrakenCollectorError(
+                        f"Invalid record structure at line {line_number}."
+                    )
+
                 timestamp = record.get("open_time")
 
                 if not isinstance(timestamp, str):
@@ -248,9 +253,8 @@ def collect_kraken_ohlcv(
     if not candles:
         return []
 
-    # Kraken always includes the currently forming candle
-    # as the final entry. It must never be used as a
-    # completed candle.
+    # Kraken includes the currently forming candle
+    # as the final entry. It must not be stored.
     closed_candles = candles[:-1]
 
     destination = Path(
@@ -259,9 +263,7 @@ def collect_kraken_ohlcv(
         else DEFAULT_OUTPUT_DIR
     )
 
-    filename = (
-        f"kraken_{pair}_{timeframe}.jsonl"
-    )
+    filename = f"kraken_{pair}_{timeframe}.jsonl"
 
     output_file = destination / filename
 
@@ -307,9 +309,19 @@ def collect_kraken_ohlcv(
             "source": "kraken",
             "pair": pair,
             "timeframe": timeframe,
+
             "open_time": open_iso,
             "close_time": _iso_utc(close_time),
             "collected_at": _iso_utc(checked_at),
+
+            # Standard OHLCV fields for validation.
+            "open": candle[1],
+            "high": candle[2],
+            "low": candle[3],
+            "close": candle[4],
+            "volume": candle[6],
+
+            # Preserve the original provider response.
             "provider_candle": list(candle),
         }
 
