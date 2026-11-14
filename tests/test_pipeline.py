@@ -1,6 +1,6 @@
 """Integration tests for the candle validation pipeline."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, tzinfo
 
 import pandas as pd
 import pytest
@@ -8,6 +8,8 @@ import pytest
 from validation.pipeline import (
     ValidationPipelineError,
     run_candle_validation,
+    _is_utc_datetime,
+    _normalize_source,
 )
 
 
@@ -244,6 +246,83 @@ def test_pipeline_handles_blank_source(tmp_path):
 
     assert result["status"] == "FAIL"
     assert result["reports"][0]["source"] == "UNKNOWN"
+
+
+def test_normalize_source_handles_values_causing_isna_error():
+
+    result = _normalize_source(["kraken", "coinbase"])
+
+    assert result == "['kraken', 'coinbase']"
+
+
+def test_normalize_source_handles_empty_string():
+
+    assert _normalize_source("") == "UNKNOWN"
+
+
+def test_normalize_source_handles_whitespace():
+
+    assert _normalize_source("   ") == "UNKNOWN"
+
+
+# --------------------------------------------------
+# UTC datetime helper tests
+# --------------------------------------------------
+
+def test_is_utc_datetime_accepts_utc_datetime():
+
+    assert _is_utc_datetime(CHECK_TIME) is True
+
+
+def test_is_utc_datetime_rejects_naive_datetime():
+
+    naive = datetime(2026, 11, 13, 12, 0)
+
+    assert _is_utc_datetime(naive) is False
+
+
+def test_is_utc_datetime_rejects_non_datetime():
+
+    assert _is_utc_datetime("2026-11-13T12:00:00Z") is False
+
+
+def test_is_utc_datetime_rejects_non_utc_datetime():
+
+    non_utc = datetime(
+        2026,
+        11,
+        13,
+        12,
+        0,
+        tzinfo=timezone(timedelta(hours=3)),
+    )
+
+    assert _is_utc_datetime(non_utc) is False
+
+
+def test_is_utc_datetime_handles_timezone_exception():
+
+    class BrokenTimezone(tzinfo):
+
+        def utcoffset(self, dt):
+            raise ValueError("Timezone calculation failed")
+
+        def dst(self, dt):
+            return None
+
+        def tzname(self, dt):
+            return "BROKEN"
+
+    broken_datetime = datetime(
+        2026,
+        11,
+        13,
+        12,
+        0,
+        tzinfo=BrokenTimezone(),
+    )
+
+    assert _is_utc_datetime(broken_datetime) is False
 
 
 # --------------------------------------------------
