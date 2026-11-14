@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+
 import config.loader as loader
 from config.loader import (
     ConfigurationError,
