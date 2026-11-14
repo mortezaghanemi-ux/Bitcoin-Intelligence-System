@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import math
 
 import pytest
 
@@ -74,6 +75,7 @@ def evaluate_valid_forecast(
         "actual_market_data": actual_data,
         "evaluation_time": EVALUATION_TIME,
     }
+
     parameters.update(kwargs)
 
     return evaluate_forecast(**parameters)
@@ -87,6 +89,7 @@ def test_evaluate_forecast_successfully():
     result = evaluate_valid_forecast()
 
     assert isinstance(result, dict)
+    assert result["status"] == "SUCCESS"
 
 
 def test_evaluation_contains_forecast_id():
@@ -98,22 +101,22 @@ def test_evaluation_contains_forecast_id():
 def test_evaluation_contains_brier_score():
     result = evaluate_valid_forecast()
 
-    assert "brier_score" in result
-    assert 0 <= result["brier_score"] <= 2
+    assert "brier_score" in result["metrics"]
+    assert 0 <= result["metrics"]["brier_score"] <= 2
 
 
 def test_evaluation_contains_log_loss():
     result = evaluate_valid_forecast()
 
-    assert "log_loss" in result
-    assert result["log_loss"] >= 0
+    assert "log_loss" in result["metrics"]
+    assert result["metrics"]["log_loss"] >= 0
 
 
 def test_evaluation_contains_directional_accuracy():
     result = evaluate_valid_forecast()
 
-    assert "directional_accuracy" in result
-    assert result["directional_accuracy"] in (0, 1, 0.0, 1.0, True, False)
+    assert "directional_accuracy" in result["metrics"]
+    assert result["metrics"]["directional_accuracy"] in (0, 1)
 
 
 # =========================================================
@@ -122,43 +125,35 @@ def test_evaluation_contains_directional_accuracy():
 
 def test_positive_market_move_is_bullish():
     result = evaluate_valid_forecast(
-        actual_data=make_actual_data(
-            outcome_price=100000.0
-        )
+        actual_data=make_actual_data(100000.0)
     )
 
-    assert result["actual_direction"] == BULLISH
+    assert result["actual_outcome"]["direction"] == BULLISH
 
 
 def test_negative_market_move_is_bearish():
     result = evaluate_valid_forecast(
-        actual_data=make_actual_data(
-            outcome_price=90000.0
-        )
+        actual_data=make_actual_data(90000.0)
     )
 
-    assert result["actual_direction"] == BEARISH
+    assert result["actual_outcome"]["direction"] == BEARISH
 
 
 def test_small_market_move_is_neutral():
     result = evaluate_valid_forecast(
-        actual_data=make_actual_data(
-            outcome_price=95400.0
-        )
+        actual_data=make_actual_data(95400.0)
     )
 
-    assert result["actual_direction"] == NEUTRAL
+    assert result["actual_outcome"]["direction"] == NEUTRAL
 
 
 def test_custom_neutral_threshold_is_supported():
     result = evaluate_valid_forecast(
-        actual_data=make_actual_data(
-            outcome_price=95500.0
-        ),
+        actual_data=make_actual_data(95500.0),
         neutral_threshold_pct=1.0,
     )
 
-    assert result["actual_direction"] == NEUTRAL
+    assert result["actual_outcome"]["direction"] == NEUTRAL
 
 
 # =========================================================
@@ -176,9 +171,7 @@ def test_brier_score_is_calculated_correctly():
 
     result = evaluate_valid_forecast(
         forecast=forecast,
-        actual_data=make_actual_data(
-            outcome_price=100000.0
-        ),
+        actual_data=make_actual_data(100000.0),
     )
 
     expected = (
@@ -187,7 +180,9 @@ def test_brier_score_is_calculated_correctly():
         + (0.10 - 0.0) ** 2
     )
 
-    assert result["brier_score"] == pytest.approx(expected)
+    assert result["metrics"]["brier_score"] == pytest.approx(
+        expected
+    )
 
 
 def test_perfect_forecast_has_zero_brier_score():
@@ -201,12 +196,10 @@ def test_perfect_forecast_has_zero_brier_score():
 
     result = evaluate_valid_forecast(
         forecast=forecast,
-        actual_data=make_actual_data(
-            outcome_price=100000.0
-        ),
+        actual_data=make_actual_data(100000.0),
     )
 
-    assert result["brier_score"] == pytest.approx(0.0)
+    assert result["metrics"]["brier_score"] == pytest.approx(0.0)
 
 
 # =========================================================
@@ -214,24 +207,9 @@ def test_perfect_forecast_has_zero_brier_score():
 # =========================================================
 
 def test_log_loss_is_calculated_correctly():
-    forecast = make_forecast(
-        probabilities={
-            BULLISH: 70.0,
-            BEARISH: 20.0,
-            NEUTRAL: 10.0,
-        }
-    )
+    result = evaluate_valid_forecast()
 
-    result = evaluate_valid_forecast(
-        forecast=forecast,
-        actual_data=make_actual_data(
-            outcome_price=100000.0
-        ),
-    )
-
-    import math
-
-    assert result["log_loss"] == pytest.approx(
+    assert result["metrics"]["log_loss"] == pytest.approx(
         -math.log(0.70)
     )
 
@@ -247,13 +225,11 @@ def test_log_loss_handles_zero_probability():
 
     result = evaluate_valid_forecast(
         forecast=forecast,
-        actual_data=make_actual_data(
-            outcome_price=100000.0
-        ),
+        actual_data=make_actual_data(100000.0),
     )
 
-    assert result["log_loss"] > 0
-    assert result["log_loss"] < float("inf")
+    assert result["metrics"]["log_loss"] > 0
+    assert math.isfinite(result["metrics"]["log_loss"])
 
 
 # =========================================================
@@ -271,12 +247,10 @@ def test_correct_direction_has_full_directional_accuracy():
 
     result = evaluate_valid_forecast(
         forecast=forecast,
-        actual_data=make_actual_data(
-            outcome_price=100000.0
-        ),
+        actual_data=make_actual_data(100000.0),
     )
 
-    assert result["directional_accuracy"] == 1.0
+    assert result["metrics"]["directional_accuracy"] == 1.0
 
 
 def test_wrong_direction_has_zero_directional_accuracy():
@@ -290,12 +264,10 @@ def test_wrong_direction_has_zero_directional_accuracy():
 
     result = evaluate_valid_forecast(
         forecast=forecast,
-        actual_data=make_actual_data(
-            outcome_price=100000.0
-        ),
+        actual_data=make_actual_data(100000.0),
     )
 
-    assert result["directional_accuracy"] == 0.0
+    assert result["metrics"]["directional_accuracy"] == 0.0
 
 
 # =========================================================
@@ -514,6 +486,7 @@ def test_evaluate_forecasts_returns_aggregate():
     result = evaluate_forecasts([first, second])
 
     assert isinstance(result, dict)
+    assert result["status"] == "SUCCESS"
 
 
 def test_aggregate_contains_evaluation_count():
@@ -527,7 +500,7 @@ def test_aggregate_contains_evaluation_count():
 
     result = evaluate_forecasts([first, second])
 
-    assert result["total_evaluated"] == 2
+    assert result["evaluation_count"] == 2
 
 
 def test_aggregate_contains_average_brier_score():
@@ -541,8 +514,8 @@ def test_aggregate_contains_average_brier_score():
 
     result = evaluate_forecasts([first, second])
 
-    assert "mean_brier_score" in result
-    assert 0 <= result["mean_brier_score"] <= 2
+    assert "mean_brier_score" in result["metrics"]
+    assert 0 <= result["metrics"]["mean_brier_score"] <= 2
 
 
 def test_aggregate_contains_average_log_loss():
@@ -556,8 +529,8 @@ def test_aggregate_contains_average_log_loss():
 
     result = evaluate_forecasts([first, second])
 
-    assert "mean_log_loss" in result
-    assert result["mean_log_loss"] >= 0
+    assert "mean_log_loss" in result["metrics"]
+    assert result["metrics"]["mean_log_loss"] >= 0
 
 
 def test_aggregate_contains_directional_accuracy():
@@ -571,7 +544,7 @@ def test_aggregate_contains_directional_accuracy():
 
     result = evaluate_forecasts([first, second])
 
-    assert "directional_accuracy" in result
+    assert "directional_accuracy" in result["metrics"]
 
 
 def test_duplicate_forecast_evaluations_are_rejected():
