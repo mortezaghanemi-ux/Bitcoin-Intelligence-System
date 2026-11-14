@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any
-
 import math
+
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_FLOOR
+from typing import Any
 
 
 BULLISH = "BULLISH"
@@ -21,6 +22,10 @@ VALID_DIRECTIONS = {
 DEFAULT_HORIZON_DAYS = 7
 DEFAULT_MODEL_VERSION = "heuristic-v1"
 
+PROBABILITY_SCALE = 100
+PROBABILITY_DECIMALS = 2
+PROBABILITY_UNITS = PROBABILITY_SCALE * (10 ** PROBABILITY_DECIMALS)
+
 
 class ForecastEngineError(RuntimeError):
     """Raised when forecast generation fails."""
@@ -30,7 +35,7 @@ def _parse_utc_timestamp(
     value: Any,
     field_name: str,
 ) -> datetime:
-    """Parse a timezone-aware UTC timestamp."""
+    """Parse and validate a timezone-aware UTC timestamp."""
 
     if isinstance(value, datetime):
         timestamp = value
@@ -38,7 +43,7 @@ def _parse_utc_timestamp(
     elif isinstance(value, str) and value.strip():
         try:
             timestamp = datetime.fromisoformat(
-                value.replace("Z", "+00:00")
+                value.strip().replace("Z", "+00:00")
             )
         except (TypeError, ValueError, OverflowError) as exc:
             raise ForecastEngineError(
@@ -55,7 +60,14 @@ def _parse_utc_timestamp(
             f"{field_name} must be timezone-aware."
         )
 
-    if timestamp.utcoffset() != timedelta(0):
+    try:
+        offset = timestamp.utcoffset()
+    except (ValueError, OverflowError) as exc:
+        raise ForecastEngineError(
+            f"Invalid timezone for {field_name}."
+        ) from exc
+
+    if offset != timedelta(0):
         raise ForecastEngineError(
             f"{field_name} must use UTC."
         )
@@ -206,18 +218,22 @@ def _validate_market_analysis(
             "Confluence analysis must have SUCCESS status."
         )
 
-    if (
-        confluence.get("analysis_timestamp")
-        != market_analysis["analysis_timestamp"]
-    ):
+    confluence_analysis_time = _parse_utc_timestamp(
+        confluence.get("analysis_timestamp"),
+        "confluence.analysis_timestamp",
+    )
+
+    confluence_candle_time = _parse_utc_timestamp(
+        confluence.get("last_candle_close_time"),
+        "confluence.last_candle_close_time",
+    )
+
+    if confluence_analysis_time != analysis_timestamp:
         raise ForecastEngineError(
             "Confluence and market analysis timestamps do not match."
         )
 
-    if (
-        confluence.get("last_candle_close_time")
-        != market_analysis["last_candle_close_time"]
-    ):
+    if confluence_candle_time != candle_close_time:
         raise ForecastEngineError(
             "Confluence and market analysis candle timestamps do not match."
         )
@@ -253,10 +269,9 @@ def _validate_market_analysis(
             "agreement_ratio must be between 0 and 1."
         )
 
-    if not isinstance(
-        confluence.get("component_scores"),
-        dict,
-    ):
+    component_scores = confluence.get("component_scores")
+
+    if not isinstance(component_scores, dict):
         raise ForecastEngineError(
             "Confluence component_scores must be a dictionary."
         )
@@ -277,43 +292,106 @@ def _validate_market_analysis(
 def _normalize_probabilities(
     probabilities: dict[str, float],
 ) -> dict[str, float]:
-    """Normalize probabilities and preserve an exact 100 total."""
+    """
+    Normalize probabilities using integer hundredth-percent units.
 
-    total = sum(probabilities.values())
+    The largest remainder method guarantees:
+    - Every probability is represented with two decimal places.
+    - Every probability remains within 0..100.
+    - The final total is exactly 100.00.
+    """
 
-    if not math.isfinite(total) or total <= 0:
+    if not isinstance(probabilities, dict) or not probabilities:
         raise ForecastEngineError(
             "Invalid probability distribution."
         )
 
-    normalized = {
-        name: value / total * 100.0
-        for name, value in probabilities.items()
+    if set(probabilities) != VALID_DIRECTIONS:
+        raise ForecastEngineError(
+            "Probability distribution contains invalid directions."
+        )
+
+    decimal_values: dict[str, Decimal] = {}
+
+    for name, value in probabilities.items():
+
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float, Decimal))
+        ):
+            raise ForecastEngineError(
+                "Probabilities must be numeric."
+            )
+
+        try:
+            decimal_value = Decimal(str(value))
+        except Exception as exc:
+            raise ForecastEngineError(
+                "Invalid probability value."
+            ) from exc
+
+        if not decimal_value.is_finite() or decimal_value < 0:
+            raise ForecastEngineError(
+                "Probabilities must be finite and non-negative."
+            )
+
+        decimal_values[name] = decimal_value
+
+    total = sum(
+        decimal_values.values(),
+        Decimal("0"),
+    )
+
+    if total <= 0:
+        raise ForecastEngineError(
+            "Invalid probability distribution."
+        )
+
+    exact_units = {
+        name: (
+            value / total * Decimal(PROBABILITY_UNITS)
+        )
+        for name, value in decimal_values.items()
     }
+
+    integer_units = {
+        name: int(value.to_integral_value(rounding=ROUND_FLOOR))
+        for name, value in exact_units.items()
+    }
+
+    remaining_units = (
+        PROBABILITY_UNITS - sum(integer_units.values())
+    )
+
+    remainders = {
+        name: exact_units[name] - Decimal(integer_units[name])
+        for name in exact_units
+    }
+
+    remainder_order = sorted(
+        remainders,
+        key=lambda name: (
+            remainders[name],
+            exact_units[name],
+            name == BULLISH,
+        ),
+        reverse=True,
+    )
+
+    for name in remainder_order[:remaining_units]:
+        integer_units[name] += 1
 
     rounded = {
-        name: round(value, 2)
-        for name, value in normalized.items()
+        name: integer_units[name] / (10 ** PROBABILITY_DECIMALS)
+        for name in VALID_DIRECTIONS
     }
 
-    difference = round(
-        100.0 - sum(rounded.values()),
-        2,
-    )
-
-    largest = max(
-        rounded,
-        key=rounded.get,
-    )
-
-    rounded[largest] = round(
-        rounded[largest] + difference,
-        2,
-    )
-
     if (
-        any(value < 0 or value > 100 for value in rounded.values())
-        or sum(rounded.values()) != 100.0
+        any(
+            not math.isfinite(value) or value < 0 or value > 100
+            for value in rounded.values()
+        )
+        or sum(integer_units.values()) != PROBABILITY_UNITS
     ):
         raise ForecastEngineError(
             "Probability normalization failed."
@@ -521,29 +599,7 @@ def generate_forecast(
     """
     Generate a probabilistic Bitcoin market forecast.
 
-    Parameters
-    ----------
-    market_analysis:
-        Successful output from market_analysis.engine.analyze_market.
-
-    forecast_time:
-        UTC forecast generation timestamp.
-
-    horizon_days:
-        Forecast horizon in days. Defaults to seven days.
-
-    model_version:
-        Identifier for the forecast model.
-
-    Returns
-    -------
-    dict
-        A forecast record containing probabilities, confidence,
-        market condition, influencing factors, and metadata.
-
-    Notes
-    -----
-    This initial engine uses a transparent heuristic model.
+    The engine uses a transparent heuristic model.
     It does not claim statistical calibration or guaranteed accuracy.
     It does not persist records or execute trades.
     """
