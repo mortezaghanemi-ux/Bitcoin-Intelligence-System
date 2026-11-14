@@ -103,6 +103,27 @@ def _validate_parameters(
                 f"{name} must be a positive integer."
             )
 
+    numeric_parameters = {
+        "trending_threshold": trending_threshold,
+        "ranging_threshold": ranging_threshold,
+        "high_volatility_ratio": high_volatility_ratio,
+        "low_volatility_ratio": low_volatility_ratio,
+    }
+
+    for name, value in numeric_parameters.items():
+
+        if (
+            isinstance(value, bool)
+            or not isinstance(
+                value,
+                (int, float, np.integer, np.floating),
+            )
+            or not np.isfinite(value)
+        ):
+            raise MarketRegimeError(
+                f"{name} must be a finite numeric value."
+            )
+
     minimum_required = max(
         adx_period * 2,
         atr_period + volatility_lookback,
@@ -115,29 +136,26 @@ def _validate_parameters(
             f"{minimum_required}."
         )
 
-    if trending_threshold <= 0 or trending_threshold > 100:
+    if not 0 < trending_threshold <= 100:
         raise MarketRegimeError(
             "trending_threshold must be between 0 and 100."
         )
 
-    if ranging_threshold < 0 or ranging_threshold >= trending_threshold:
+    if (
+        ranging_threshold < 0
+        or ranging_threshold >= trending_threshold
+    ):
         raise MarketRegimeError(
             "ranging_threshold must be non-negative "
             "and smaller than trending_threshold."
         )
 
-    if (
-        not np.isfinite(high_volatility_ratio)
-        or high_volatility_ratio <= 1
-    ):
+    if high_volatility_ratio <= 1:
         raise MarketRegimeError(
             "high_volatility_ratio must be greater than 1."
         )
 
-    if (
-        not np.isfinite(low_volatility_ratio)
-        or not 0 < low_volatility_ratio < 1
-    ):
+    if not 0 < low_volatility_ratio < 1:
         raise MarketRegimeError(
             "low_volatility_ratio must be between 0 and 1."
         )
@@ -485,18 +503,10 @@ def analyze_market_regime(
     - LOW_VOLATILITY
     - TRANSITIONAL
 
-    The analysis includes:
-    - ADX and directional indicators.
-    - ATR and normalized ATR percentage.
-    - Relative volatility classification.
-    - Bollinger Band width.
-    - Volume confirmation.
-    - Market direction.
-
     Only validated, closed candles are used.
 
-    Historical volatility is calculated from past and
-    current candles only. No future information is used.
+    Historical volatility is calculated using
+    available past and current candles only.
 
     This module does not generate trading signals.
     It does not execute trades.
@@ -530,7 +540,7 @@ def analyze_market_regime(
             f"Received: {len(candles)}."
         )
 
-    # Calculate trend strength and direction.
+    # Trend calculations.
 
     adx_series, positive_di, negative_di = _calculate_adx(
         candles,
@@ -541,7 +551,20 @@ def analyze_market_regime(
     positive_di_value = float(positive_di.iloc[-1])
     negative_di_value = float(negative_di.iloc[-1])
 
-    # Calculate volatility.
+    if not np.isfinite(adx_value):
+        raise MarketRegimeError(
+            "Unable to calculate a valid ADX value."
+        )
+
+    if (
+        not np.isfinite(positive_di_value)
+        or not np.isfinite(negative_di_value)
+    ):
+        raise MarketRegimeError(
+            "Unable to calculate valid directional indicators."
+        )
+
+    # Volatility calculations.
 
     atr_series = _calculate_atr(
         candles,
@@ -554,9 +577,17 @@ def analyze_market_regime(
         candles["close"].iloc[-1]
     )
 
-    if current_price <= 0:
+    if (
+        not np.isfinite(current_price)
+        or current_price <= 0
+    ):
         raise MarketRegimeError(
-            "Latest closing price must be positive."
+            "Latest closing price must be positive and finite."
+        )
+
+    if not np.isfinite(atr_value):
+        raise MarketRegimeError(
+            "Unable to calculate a valid ATR value."
         )
 
     atr_percent = (
@@ -584,7 +615,7 @@ def analyze_market_regime(
         )
     )
 
-    # Bollinger Band width.
+    # Bollinger Band calculations.
 
     bollinger_width_series = _calculate_bollinger_width(
         candles["close"],
@@ -595,7 +626,12 @@ def analyze_market_regime(
         bollinger_width_series.iloc[-1]
     )
 
-    # Volume confirmation.
+    if not np.isfinite(bollinger_width):
+        raise MarketRegimeError(
+            "Unable to calculate Bollinger Band width."
+        )
+
+    # Volume calculations.
 
     volume_average = float(
         candles["volume"]
@@ -640,21 +676,23 @@ def analyze_market_regime(
 
     latest_close_time = candles["close_time"].iloc[-1]
 
+    trend_strength = (
+        "STRONG"
+        if adx_value >= trending_threshold
+        else (
+            "WEAK"
+            if adx_value <= ranging_threshold
+            else "MODERATE"
+        )
+    )
+
     return {
         "analysis_timestamp": timestamp.isoformat(),
         "status": "SUCCESS",
         "source": sources,
         "regime": regime,
         "direction": direction,
-        "trend_strength": (
-            "STRONG"
-            if adx_value >= trending_threshold
-            else (
-                "WEAK"
-                if adx_value <= ranging_threshold
-                else "MODERATE"
-            )
-        ),
+        "trend_strength": trend_strength,
         "volatility": {
             "condition": volatility_condition,
             "atr": round(atr_value, 8),
