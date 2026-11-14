@@ -52,7 +52,7 @@ def make_candles(
         )
 
     if base_type == SUPPLY:
-        # Bullish base candle.
+        # Bullish supply base.
         rows[20].update(
             {
                 "open": 100.0,
@@ -62,7 +62,7 @@ def make_candles(
             }
         )
 
-        # Strong bearish displacement.
+        # Bearish displacement.
         rows[21].update(
             {
                 "open": 101.0,
@@ -72,7 +72,6 @@ def make_candles(
             }
         )
 
-        # Subsequent candles remain below the supply zone.
         for index in range(22, candle_count):
             rows[index].update(
                 {
@@ -104,7 +103,7 @@ def make_candles(
             )
 
     elif base_type == DEMAND:
-        # Bearish base candle.
+        # Bearish demand base.
         rows[20].update(
             {
                 "open": 101.0,
@@ -114,7 +113,7 @@ def make_candles(
             }
         )
 
-        # Strong bullish displacement.
+        # Bullish displacement.
         rows[21].update(
             {
                 "open": 100.0,
@@ -124,7 +123,6 @@ def make_candles(
             }
         )
 
-        # Subsequent candles remain above the demand zone.
         for index in range(22, candle_count):
             rows[index].update(
                 {
@@ -201,9 +199,7 @@ def get_zone(result, zone_type):
 
 
 def test_analysis_returns_expected_structure():
-    data = make_candles(base_type=SUPPLY)
-
-    result = analyze(data)
+    result = analyze(make_candles(base_type=SUPPLY))
 
     expected_keys = {
         "analysis_timestamp",
@@ -221,10 +217,16 @@ def test_analysis_returns_expected_structure():
     assert expected_keys.issubset(result.keys())
 
 
+def test_analysis_returns_success_status():
+    result = analyze(make_candles(base_type=SUPPLY))
+
+    assert result["status"] == "SUCCESS"
+
+
 def test_analysis_uses_utc_timestamp():
     result = analyze(make_candles(base_type=SUPPLY))
 
-    timestamp = result["analysis_timestamp"]
+    timestamp = pd.Timestamp(result["analysis_timestamp"])
 
     assert timestamp.tzinfo is not None
     assert timestamp.utcoffset() == timedelta(0)
@@ -238,16 +240,14 @@ def test_analysis_counts_input_candles():
     assert result["candles_analyzed"] == len(data)
 
 
-def test_analysis_reports_source():
+def test_analysis_reports_sources_as_list():
     result = analyze(make_candles(base_type=SUPPLY))
 
-    assert result["source"] == "kraken"
+    assert result["source"] == ["kraken"]
 
 
 def test_analysis_with_no_detectable_zones():
-    data = make_candles()
-
-    result = analyze(data)
+    result = analyze(make_candles())
 
     assert result["supply_zones"] == []
     assert result["demand_zones"] == []
@@ -264,6 +264,16 @@ def test_analysis_returns_parameters_dictionary():
     result = analyze(make_candles(base_type=SUPPLY))
 
     assert isinstance(result["parameters"], dict)
+
+
+def test_analysis_returns_last_candle_close_time():
+    data = make_candles(base_type=SUPPLY)
+
+    result = analyze(data)
+
+    expected = data["close_time"].iloc[-1].isoformat()
+
+    assert result["last_candle_close_time"] == expected
 
 
 # ---------------------------------------------------------------------
@@ -289,6 +299,16 @@ def test_supply_zone_has_valid_price_boundaries():
     assert zone["lower"] > 0
 
 
+def test_supply_zone_has_correct_midpoint():
+    result = analyze(make_candles(base_type=SUPPLY))
+
+    zone = get_zone(result, SUPPLY)
+
+    expected = (zone["upper"] + zone["lower"]) / 2
+
+    assert zone["midpoint"] == pytest.approx(expected)
+
+
 def test_supply_zone_contains_confirmation_information():
     result = analyze(make_candles(base_type=SUPPLY))
 
@@ -297,6 +317,15 @@ def test_supply_zone_contains_confirmation_information():
     assert zone["base_time"] is not None
     assert zone["confirmation_time"] is not None
     assert zone["confirmation_time"] >= zone["base_time"]
+
+
+def test_supply_zone_has_positive_displacement():
+    result = analyze(make_candles(base_type=SUPPLY))
+
+    zone = get_zone(result, SUPPLY)
+
+    assert zone["displacement"] > 0
+    assert zone["strength_atr"] > 0
 
 
 def test_supply_zone_is_active_without_retest():
@@ -323,6 +352,7 @@ def test_supply_zone_becomes_mitigated_after_retest():
     zone = get_zone(result, SUPPLY)
 
     assert zone["status"] == MITIGATED
+    assert zone["touch_count"] >= 1
 
 
 def test_supply_zone_becomes_broken_after_close_above_zone():
@@ -361,6 +391,16 @@ def test_demand_zone_has_valid_price_boundaries():
     assert zone["lower"] > 0
 
 
+def test_demand_zone_has_correct_midpoint():
+    result = analyze(make_candles(base_type=DEMAND))
+
+    zone = get_zone(result, DEMAND)
+
+    expected = (zone["upper"] + zone["lower"]) / 2
+
+    assert zone["midpoint"] == pytest.approx(expected)
+
+
 def test_demand_zone_contains_confirmation_information():
     result = analyze(make_candles(base_type=DEMAND))
 
@@ -369,6 +409,15 @@ def test_demand_zone_contains_confirmation_information():
     assert zone["base_time"] is not None
     assert zone["confirmation_time"] is not None
     assert zone["confirmation_time"] >= zone["base_time"]
+
+
+def test_demand_zone_has_positive_displacement():
+    result = analyze(make_candles(base_type=DEMAND))
+
+    zone = get_zone(result, DEMAND)
+
+    assert zone["displacement"] > 0
+    assert zone["strength_atr"] > 0
 
 
 def test_demand_zone_is_active_without_retest():
@@ -395,6 +444,7 @@ def test_demand_zone_becomes_mitigated_after_retest():
     zone = get_zone(result, DEMAND)
 
     assert zone["status"] == MITIGATED
+    assert zone["touch_count"] >= 1
 
 
 def test_demand_zone_becomes_broken_after_close_below_zone():
@@ -415,34 +465,35 @@ def test_demand_zone_becomes_broken_after_close_below_zone():
 # ---------------------------------------------------------------------
 
 
-def test_summary_contains_zone_counts():
+def test_summary_contains_expected_counts():
     result = analyze(make_candles(base_type=SUPPLY))
 
-    summary = result["summary"]
-
     expected_keys = {
-        "total",
-        "supply",
-        "demand",
-        "active",
-        "mitigated",
-        "broken",
+        "total_zones",
+        "supply_count",
+        "demand_count",
+        "active_count",
+        "mitigated_count",
+        "broken_count",
     }
 
-    assert expected_keys.issubset(summary.keys())
+    assert expected_keys.issubset(result["summary"].keys())
 
 
 def test_summary_total_matches_detected_zones():
     result = analyze(make_candles(base_type=SUPPLY))
 
-    assert result["summary"]["total"] == len(result["zones"])
+    assert (
+        result["summary"]["total_zones"]
+        == len(result["zones"])
+    )
 
 
 def test_summary_supply_count_matches_supply_list():
     result = analyze(make_candles(base_type=SUPPLY))
 
     assert (
-        result["summary"]["supply"]
+        result["summary"]["supply_count"]
         == len(result["supply_zones"])
     )
 
@@ -451,7 +502,7 @@ def test_summary_demand_count_matches_demand_list():
     result = analyze(make_candles(base_type=DEMAND))
 
     assert (
-        result["summary"]["demand"]
+        result["summary"]["demand_count"]
         == len(result["demand_zones"])
     )
 
@@ -462,15 +513,15 @@ def test_summary_status_counts_match_zone_statuses():
     zones = result["zones"]
     summary = result["summary"]
 
-    assert summary["active"] == sum(
+    assert summary["active_count"] == sum(
         zone["status"] == ACTIVE for zone in zones
     )
 
-    assert summary["mitigated"] == sum(
+    assert summary["mitigated_count"] == sum(
         zone["status"] == MITIGATED for zone in zones
     )
 
-    assert summary["broken"] == sum(
+    assert summary["broken_count"] == sum(
         zone["status"] == BROKEN for zone in zones
     )
 
@@ -499,13 +550,21 @@ def test_all_zones_are_present_in_combined_list():
     assert len(result["zones"]) == len(combined)
 
 
+def test_zone_source_is_preserved():
+    result = analyze(make_candles(base_type=SUPPLY))
+
+    zone = get_zone(result, SUPPLY)
+
+    assert zone["source"] == "kraken"
+
+
 # ---------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------
 
 
 def test_rejects_non_dataframe_input():
-    with pytest.raises(ZoneAnalysisError):
+    with pytest.raises(TypeError):
         analyze_supply_demand(
             data=[1, 2, 3],
             analysis_time=ANALYSIS_TIME,
@@ -546,6 +605,25 @@ def test_rejects_naive_analysis_timestamp():
         )
 
 
+def test_rejects_non_utc_analysis_timestamp():
+    data = make_candles(base_type=SUPPLY)
+
+    non_utc = datetime(
+        2026,
+        11,
+        14,
+        3,
+        0,
+        tzinfo=timezone(timedelta(hours=3)),
+    )
+
+    with pytest.raises(ZoneAnalysisError):
+        analyze_supply_demand(
+            data=data,
+            analysis_time=non_utc,
+        )
+
+
 def test_rejects_unsorted_candles():
     data = make_candles(base_type=SUPPLY)
 
@@ -566,45 +644,59 @@ def test_rejects_duplicate_candles():
 
 
 def test_rejects_invalid_atr_period():
-    data = make_candles(base_type=SUPPLY)
-
     with pytest.raises(ZoneAnalysisError):
-        analyze(data, atr_period=0)
+        analyze(
+            make_candles(base_type=SUPPLY),
+            atr_period=0,
+        )
 
 
 def test_rejects_invalid_impulse_window():
-    data = make_candles(base_type=SUPPLY)
-
     with pytest.raises(ZoneAnalysisError):
-        analyze(data, impulse_window=0)
+        analyze(
+            make_candles(base_type=SUPPLY),
+            impulse_window=0,
+        )
 
 
 def test_rejects_invalid_atr_multiplier():
-    data = make_candles(base_type=SUPPLY)
-
     with pytest.raises(ZoneAnalysisError):
-        analyze(data, atr_multiplier=0)
+        analyze(
+            make_candles(base_type=SUPPLY),
+            atr_multiplier=0,
+        )
 
 
 def test_rejects_invalid_minimum_candles():
-    data = make_candles(base_type=SUPPLY)
-
     with pytest.raises(ZoneAnalysisError):
-        analyze(data, minimum_candles=0)
+        analyze(
+            make_candles(base_type=SUPPLY),
+            minimum_candles=0,
+        )
 
 
 def test_rejects_nan_atr_multiplier():
-    data = make_candles(base_type=SUPPLY)
-
     with pytest.raises(ZoneAnalysisError):
-        analyze(data, atr_multiplier=float("nan"))
+        analyze(
+            make_candles(base_type=SUPPLY),
+            atr_multiplier=float("nan"),
+        )
 
 
 def test_rejects_infinite_atr_multiplier():
-    data = make_candles(base_type=SUPPLY)
-
     with pytest.raises(ZoneAnalysisError):
-        analyze(data, atr_multiplier=float("inf"))
+        analyze(
+            make_candles(base_type=SUPPLY),
+            atr_multiplier=float("inf"),
+        )
+
+
+def test_rejects_boolean_atr_period():
+    with pytest.raises(ZoneAnalysisError):
+        analyze(
+            make_candles(base_type=SUPPLY),
+            atr_period=True,
+        )
 
 
 # ---------------------------------------------------------------------
