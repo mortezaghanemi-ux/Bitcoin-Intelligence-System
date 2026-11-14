@@ -1,3 +1,4 @@
+
 """Tests for Bitcoin market trend analysis."""
 
 from datetime import datetime, timedelta, timezone
