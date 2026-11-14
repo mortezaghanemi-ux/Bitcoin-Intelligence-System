@@ -453,3 +453,50 @@ def test_validation_rejects_non_utc_schedule_timezone():
         match="schedules.timezone",
     ):
         loader._validate_configuration(config)
+
+
+def test_validation_rejects_api_keys_storage_enabled():
+    config = load_config()
+    config["settings"]["data_policy"][
+        "never_store_api_keys_in_files"
+    ] = False
+
+    with pytest.raises(
+        ConfigurationError,
+        match="API keys must never be stored",
+    ):
+        loader._validate_configuration(config)
+
+
+def test_validation_rejects_non_utc_timeframe_timezone():
+    config = load_config()
+    config["timeframes"]["timezone"] = "LOCAL"
+
+    with pytest.raises(
+        ConfigurationError,
+        match="timeframes.timezone must be UTC",
+    ):
+        loader._validate_configuration(config)
+
+
+def test_validation_rejects_invalid_trader_timeframes_type():
+    config = load_config()
+    config["trader"]["trader"]["timeframes"] = None
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Trader timeframes must be a non-empty list",
+    ):
+        loader._validate_configuration(config)
+
+
+def test_module_execution_runs_main_guard():
+    import runpy
+
+    with pytest.raises(SystemExit) as error:
+        runpy.run_path(
+            str(Path(loader.__file__)),
+            run_name="__main__",
+        )
+
+    assert error.value.code == 0
