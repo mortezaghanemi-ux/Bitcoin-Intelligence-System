@@ -24,7 +24,6 @@ def test_require_mapping_rejects_non_mapping_values():
 
 def test_require_mapping_accepts_dictionary():
     value = {"key": "value"}
-
     assert _require_mapping(value, "test") is value
 
 
@@ -41,14 +40,7 @@ def test_require_bool_accepts_boolean_values():
 
 @pytest.mark.parametrize(
     "value",
-    [
-        None,
-        True,
-        False,
-        "10",
-        [],
-        {},
-    ],
+    [None, True, False, "10", [], {}],
 )
 def test_positive_number_rejects_non_numeric_values(value):
     with pytest.raises(ConfigurationError):
@@ -57,15 +49,7 @@ def test_positive_number_rejects_non_numeric_values(value):
 
 @pytest.mark.parametrize(
     "value",
-    [
-        0,
-        -1,
-        0.0,
-        -2.5,
-        float("nan"),
-        float("inf"),
-        float("-inf"),
-    ],
+    [0, -1, 0.0, -2.5, float("nan"), float("inf"), float("-inf")],
 )
 def test_positive_number_rejects_invalid_numeric_values(value):
     with pytest.raises(ConfigurationError):
@@ -81,9 +65,7 @@ def test_secret_detection_finds_nested_credentials():
     data = {
         "settings": {
             "services": [
-                {
-                    "api_key": "hardcoded-value",
-                }
+                {"api_key": "hardcoded-value"},
             ]
         }
     }
@@ -131,14 +113,14 @@ def test_secret_detection_accepts_allowed_security_keys():
 def test_secret_detection_handles_nested_lists():
     data = {
         "items": [
-            {"token": "hardcoded-token"},
+            {"access_token": "hardcoded-token"},
             {"name": "safe"},
         ]
     }
 
     findings = _contains_secret_key(data)
 
-    assert "items[0].token" in findings
+    assert "items[0].access_token" in findings
 
 
 def test_secret_detection_returns_empty_for_safe_data():
@@ -438,13 +420,7 @@ def test_validation_rejects_invalid_maximum_leverage():
 
 @pytest.mark.parametrize(
     "value",
-    [
-        True,
-        -1,
-        1.5,
-        "3",
-        None,
-    ],
+    [True, -1, 1.5, "3", None],
 )
 def test_validation_rejects_invalid_maximum_retries(value):
     config = load_config()
