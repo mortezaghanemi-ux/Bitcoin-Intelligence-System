@@ -1,4 +1,3 @@
-
 """Bitcoin supply and demand zone analysis."""
 
 from __future__ import annotations
