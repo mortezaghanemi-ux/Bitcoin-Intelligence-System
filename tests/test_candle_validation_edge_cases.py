@@ -308,3 +308,21 @@ def test_empty_dataframe_returns_pass_report():
     assert report["valid_records"] == 0
     assert report["rejected_records"] == 0
     assert report["status"] == "PASS"
+
+
+def test_reject_complex_number_that_cannot_be_converted_to_float():
+
+    candle = valid_candle()
+    candle["open"] = 95000 + 1j
+
+    accepted, rejected, report = validate_candles(
+        pd.DataFrame([candle]),
+        validation_time=CHECK_TIME,
+    )
+
+    assert accepted.empty
+    assert len(rejected) == 1
+    assert "open_must_be_finite_numeric" in (
+        rejected.iloc[0]["validation_errors"]
+    )
+    assert report["status"] == "FAIL"
