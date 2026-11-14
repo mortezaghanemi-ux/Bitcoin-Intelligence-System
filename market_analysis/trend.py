@@ -30,6 +30,8 @@ STRENGTH_STRONG = "STRONG"
 STRENGTH_MODERATE = "MODERATE"
 STRENGTH_WEAK = "WEAK"
 
+MOMENTUM_PERIOD = 5
+
 
 class TrendAnalysisError(RuntimeError):
     """Raised when trend analysis cannot be completed."""
@@ -41,9 +43,7 @@ def _normalize_analysis_time(
     """Validate and normalize the UTC analysis timestamp."""
 
     if analysis_time is None:
-        return pd.Timestamp(
-            datetime.now(timezone.utc)
-        )
+        return pd.Timestamp(datetime.now(timezone.utc))
 
     try:
         timestamp = pd.Timestamp(analysis_time)
@@ -87,7 +87,6 @@ def _validate_parameters(
     }
 
     for name, value in parameters.items():
-
         if (
             isinstance(value, bool)
             or not isinstance(value, int)
@@ -112,12 +111,17 @@ def _validate_parameters(
             "minimum_candles must be at least twice adx_period."
         )
 
+    if minimum_candles <= MOMENTUM_PERIOD:
+        raise TrendAnalysisError(
+            "minimum_candles must exceed the momentum period."
+        )
+
 
 def _validate_candles(
     data: pd.DataFrame,
     analysis_time: pd.Timestamp,
 ) -> pd.DataFrame:
-    """Validate candles using the project's central validator."""
+    """Validate candles using the central project validator."""
 
     if not isinstance(data, pd.DataFrame):
         raise TypeError(
@@ -167,7 +171,7 @@ def _validate_candles(
 
     result = accepted.copy(deep=True)
 
-    # Ensure chronological ordering.
+    # Require chronological ordering.
     if not result["open_time"].is_monotonic_increasing:
         raise TrendAnalysisError(
             "Candles must be sorted by open_time."
@@ -178,8 +182,7 @@ def _validate_candles(
             "Candle close_time values must be sorted."
         )
 
-    # A single chronological candle series cannot contain
-    # multiple records for the same opening or closing time.
+    # A single timeframe must have one candle per timestamp.
     if result["open_time"].duplicated().any():
         raise TrendAnalysisError(
             "Duplicate candle open_time values detected."
@@ -203,9 +206,8 @@ def _validate_candles(
             "Every candle must have a valid source."
         )
 
-    # Ensure all timestamps are UTC.
+    # Ensure timestamps are timezone-aware UTC.
     for column in ("open_time", "close_time"):
-
         if not isinstance(
             result[column].dtype,
             pd.DatetimeTZDtype,
@@ -227,6 +229,15 @@ def _calculate_adx(
     period: int,
 ) -> pd.Series:
     """Calculate Average Directional Index."""
+
+    if (
+        isinstance(period, bool)
+        or not isinstance(period, int)
+        or period <= 0
+    ):
+        raise TrendAnalysisError(
+            "ADX period must be a positive integer."
+        )
 
     upward = data["high"].diff()
     downward = -data["low"].diff()
@@ -272,16 +283,14 @@ def _calculate_adx(
         min_periods=period,
     ).mean()
 
+    safe_atr = atr.replace(0, np.nan)
+
     positive_di = (
-        100
-        * positive_smoothed
-        / atr.replace(0, np.nan)
+        100 * positive_smoothed / safe_atr
     )
 
     negative_di = (
-        100
-        * negative_smoothed
-        / atr.replace(0, np.nan)
+        100 * negative_smoothed / safe_atr
     )
 
     denominator = (
@@ -294,8 +303,8 @@ def _calculate_adx(
         / denominator
     )
 
-    # A valid market with no directional movement
-    # has zero directional strength.
+    # Zero directional movement means zero DX,
+    # not an undefined or artificially strong trend.
     no_direction = (
         atr.notna()
         & positive_di.fillna(0).eq(0)
@@ -313,12 +322,12 @@ def _calculate_adx(
         min_periods=period,
     ).mean()
 
-    return adx
+    return adx.clip(lower=0, upper=100)
 
 
 def _calculate_momentum(
     close: pd.Series,
-    period: int = 5,
+    period: int = MOMENTUM_PERIOD,
 ) -> float:
     """Calculate recent price momentum percentage."""
 
@@ -335,9 +344,13 @@ def _calculate_momentum(
         close.iloc[-1]
     )
 
-    if previous <= 0:
+    if (
+        not np.isfinite(previous)
+        or not np.isfinite(current)
+        or previous <= 0
+    ):
         raise TrendAnalysisError(
-            "Invalid previous price for momentum calculation."
+            "Invalid prices for momentum calculation."
         )
 
     return float(
@@ -366,17 +379,9 @@ def _calculate_ma_structure(
         min_periods=slow_period,
     ).mean()
 
-    current_price = float(
-        close.iloc[-1]
-    )
-
-    fast_value = float(
-        fast_ma.iloc[-1]
-    )
-
-    slow_value = float(
-        slow_ma.iloc[-1]
-    )
+    current_price = float(close.iloc[-1])
+    fast_value = float(fast_ma.iloc[-1])
+    slow_value = float(slow_ma.iloc[-1])
 
     if not np.isfinite(fast_value):
         raise TrendAnalysisError(
@@ -431,33 +436,39 @@ def _calculate_trend_score(
 
     score = 0.0
 
-    if structure["price_above_fast"]:
+    price = structure["price"]
+    fast_ma = structure["fast_ma"]
+    slow_ma = structure["slow_ma"]
+
+    # Price versus fast moving average.
+    if price > fast_ma:
         score += 20
-    else:
+
+    elif price < fast_ma:
         score -= 20
 
-    if structure["price_above_slow"]:
+    # Price versus slow moving average.
+    if price > slow_ma:
         score += 25
-    else:
+
+    elif price < slow_ma:
         score -= 25
 
-    if structure["fast_above_slow"]:
+    # Fast versus slow moving average.
+    if fast_ma > slow_ma:
         score += 25
-    else:
+
+    elif fast_ma < slow_ma:
         score -= 25
 
+    # Momentum contribution.
     if momentum > 0:
-        score += min(
-            abs(momentum) * 5,
-            20,
-        )
+        score += min(abs(momentum) * 5, 20)
 
     elif momentum < 0:
-        score -= min(
-            abs(momentum) * 5,
-            20,
-        )
+        score -= min(abs(momentum) * 5, 20)
 
+    # Reduce directional score in weak-trend conditions.
     if adx < 20:
         score *= 0.7
 
@@ -593,35 +604,18 @@ def analyze_trend(
     """
     Analyze Bitcoin market trend.
 
-    Parameters
-    ----------
-    data:
-        OHLCV candle data with UTC timestamps and source.
-    fast_period:
-        Fast EMA period.
-    slow_period:
-        Slow EMA period.
-    adx_period:
-        ADX calculation period.
-    minimum_candles:
-        Minimum number of candles required.
-    analysis_time:
-        Optional timezone-aware UTC analysis timestamp.
+    Uses validated, closed OHLCV candles only.
 
-    Returns
-    -------
-    dict
-        Trend classification, strength, confidence,
-        momentum, moving averages and reversal warnings.
-
-    Notes
-    -----
-    - Uses the central project candle validator.
-    - Uses closed candles only.
-    - Uses historical information only.
+    This module:
+    - Calculates fast and slow EMA.
+    - Calculates ADX and momentum.
+    - Classifies bullish, bearish and neutral trends.
+    - Estimates trend strength and confidence.
+    - Detects moving-average crossover warnings.
+    - Preserves source information.
     - Does not generate trading signals.
     - Does not execute trades.
-    - Does not modify the original DataFrame.
+    - Does not modify input data.
     """
 
     _validate_parameters(
@@ -657,9 +651,7 @@ def analyze_trend(
         adx_period,
     )
 
-    adx_value = float(
-        adx_series.iloc[-1]
-    )
+    adx_value = float(adx_series.iloc[-1])
 
     if not np.isfinite(adx_value):
         raise TrendAnalysisError(
