@@ -1,4 +1,3 @@
-
 """Trader candle management and historical data protection."""
 
 from __future__ import annotations
