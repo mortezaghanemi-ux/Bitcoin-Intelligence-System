@@ -155,7 +155,6 @@ def _validate_candles(
         "close",
         "volume",
     ):
-
         if (
             not pd.api.types.is_numeric_dtype(
                 result[column]
@@ -180,25 +179,16 @@ def _validate_candles(
                 f"{column} contains invalid numeric values."
             )
 
-    if (result["open"] <= 0).any():
-        raise PatternDetectionError(
-            "Open prices must be positive."
-        )
-
-    if (result["high"] <= 0).any():
-        raise PatternDetectionError(
-            "High prices must be positive."
-        )
-
-    if (result["low"] <= 0).any():
-        raise PatternDetectionError(
-            "Low prices must be positive."
-        )
-
-    if (result["close"] <= 0).any():
-        raise PatternDetectionError(
-            "Close prices must be positive."
-        )
+    for column in (
+        "open",
+        "high",
+        "low",
+        "close",
+    ):
+        if (result[column] <= 0).any():
+            raise PatternDetectionError(
+                f"{column.capitalize()} prices must be positive."
+            )
 
     if (result["volume"] < 0).any():
         raise PatternDetectionError(
@@ -229,7 +219,10 @@ def _validate_candles(
         "close_time"
     ].map(_timestamp)
 
-    if (result["close_time"] <= result["open_time"]).any():
+    if (
+        result["close_time"]
+        <= result["open_time"]
+    ).any():
         raise PatternDetectionError(
             "Candle close_time must be after open_time."
         )
@@ -419,10 +412,7 @@ def _detect_single_candle(
 
     body_ratio = body / candle_range
 
-    # Doji
-
     if body_ratio <= 0.10:
-
         _add_pattern(
             patterns,
             name="Doji",
@@ -433,10 +423,7 @@ def _detect_single_candle(
             detection_time=detection_time,
         )
 
-    # Marubozu
-
     if body_ratio >= 0.90:
-
         direction = (
             "BULLISH"
             if _bullish(candle)
@@ -444,7 +431,6 @@ def _detect_single_candle(
         )
 
         if body > 0:
-
             _add_pattern(
                 patterns,
                 name="Marubozu",
@@ -455,14 +441,11 @@ def _detect_single_candle(
                 detection_time=detection_time,
             )
 
-    # Hammer
-
     if (
         lower >= body * 2
         and upper <= body * 0.5
         and body_ratio <= 0.40
     ):
-
         _add_pattern(
             patterns,
             name="Hammer",
@@ -473,8 +456,6 @@ def _detect_single_candle(
             detection_time=detection_time,
         )
 
-    # Hanging Man
-
     if (
         index >= 1
         and lower >= body * 2
@@ -483,7 +464,6 @@ def _detect_single_candle(
         and candles.iloc[index - 1]["close"]
         > candles.iloc[index - 1]["open"]
     ):
-
         _add_pattern(
             patterns,
             name="Hanging Man",
@@ -494,14 +474,11 @@ def _detect_single_candle(
             detection_time=detection_time,
         )
 
-    # Shooting Star / Bearish Pin Bar
-
     if (
         upper >= body * 2
         and lower <= body * 0.5
         and body_ratio <= 0.40
     ):
-
         _add_pattern(
             patterns,
             name="Shooting Star",
@@ -512,14 +489,11 @@ def _detect_single_candle(
             detection_time=detection_time,
         )
 
-    # Bullish Pin Bar
-
     if (
         lower >= body * 2
         and upper <= body * 0.5
         and body_ratio <= 0.40
     ):
-
         _add_pattern(
             patterns,
             name="Bullish Pin Bar",
@@ -555,8 +529,6 @@ def _detect_two_candle(
     previous_body = _body(previous)
     current_body = _body(current)
 
-    # Bullish Engulfing
-
     if (
         _bearish(previous)
         and _bullish(current)
@@ -564,7 +536,6 @@ def _detect_two_candle(
         and current_close >= previous_open
         and current_body > previous_body
     ):
-
         _add_pattern(
             patterns,
             name="Bullish Engulfing",
@@ -575,8 +546,6 @@ def _detect_two_candle(
             detection_time=detection_time,
         )
 
-    # Bearish Engulfing
-
     if (
         _bullish(previous)
         and _bearish(current)
@@ -584,7 +553,6 @@ def _detect_two_candle(
         and current_close <= previous_open
         and current_body > previous_body
     ):
-
         _add_pattern(
             patterns,
             name="Bearish Engulfing",
@@ -595,8 +563,6 @@ def _detect_two_candle(
             detection_time=detection_time,
         )
 
-    # Bullish Harami
-
     if (
         _bearish(previous)
         and _bullish(current)
@@ -604,7 +570,6 @@ def _detect_two_candle(
         and current_close <= max(previous_open, previous_close)
         and current_body < previous_body
     ):
-
         _add_pattern(
             patterns,
             name="Bullish Harami",
@@ -615,8 +580,6 @@ def _detect_two_candle(
             detection_time=detection_time,
         )
 
-    # Bearish Harami
-
     if (
         _bullish(previous)
         and _bearish(current)
@@ -624,7 +587,6 @@ def _detect_two_candle(
         and current_close <= max(previous_open, previous_close)
         and current_body < previous_body
     ):
-
         _add_pattern(
             patterns,
             name="Bearish Harami",
@@ -634,8 +596,6 @@ def _detect_two_candle(
             candle=current,
             detection_time=detection_time,
         )
-
-    # Tweezer Bottom
 
     previous_low = float(previous["low"])
     current_low = float(current["low"])
@@ -650,7 +610,6 @@ def _detect_two_candle(
         and _bullish(current)
         and abs(previous_low - current_low) <= tolerance
     ):
-
         _add_pattern(
             patterns,
             name="Tweezer Bottom",
@@ -660,8 +619,6 @@ def _detect_two_candle(
             candle=current,
             detection_time=detection_time,
         )
-
-    # Tweezer Top
 
     previous_high = float(previous["high"])
     current_high = float(current["high"])
@@ -676,7 +633,6 @@ def _detect_two_candle(
         and _bearish(current)
         and abs(previous_high - current_high) <= tolerance
     ):
-
         _add_pattern(
             patterns,
             name="Tweezer Top",
@@ -709,15 +665,12 @@ def _detect_three_candle(
         + float(first["close"])
     ) / 2
 
-    # Morning Star
-
     if (
         _bearish(first)
         and _small_body(second, 0.35)
         and _bullish(third)
         and float(third["close"]) > first_midpoint
     ):
-
         _add_pattern(
             patterns,
             name="Morning Star",
@@ -728,15 +681,12 @@ def _detect_three_candle(
             detection_time=detection_time,
         )
 
-    # Evening Star
-
     if (
         _bullish(first)
         and _small_body(second, 0.35)
         and _bearish(third)
         and float(third["close"]) < first_midpoint
     ):
-
         _add_pattern(
             patterns,
             name="Evening Star",
@@ -746,8 +696,6 @@ def _detect_three_candle(
             candle=third,
             detection_time=detection_time,
         )
-
-    # Three White Soldiers
 
     soldiers = [
         first,
@@ -766,7 +714,6 @@ def _detect_three_candle(
             for item in soldiers
         )
     ):
-
         _add_pattern(
             patterns,
             name="Three White Soldiers",
@@ -776,8 +723,6 @@ def _detect_three_candle(
             candle=third,
             detection_time=detection_time,
         )
-
-    # Three Black Crows
 
     if (
         all(_bearish(item) for item in soldiers)
@@ -790,7 +735,6 @@ def _detect_three_candle(
             for item in soldiers
         )
     ):
-
         _add_pattern(
             patterns,
             name="Three Black Crows",
@@ -827,16 +771,11 @@ def _detect_five_candle(
         fourth,
     ]
 
-    # Rising Three Methods
-
     if (
         _bullish(first)
         and _bullish(fifth)
         and _body(fifth) > _body(first) * 0.5
-        and all(
-            _bearish(item)
-            for item in middle_candles
-        )
+        and all(_bearish(item) for item in middle_candles)
         and all(
             float(item["high"]) <= float(first["high"])
             and float(item["low"]) >= float(first["low"])
@@ -844,7 +783,6 @@ def _detect_five_candle(
         )
         and float(fifth["close"]) > float(first["high"])
     ):
-
         _add_pattern(
             patterns,
             name="Rising Three Methods",
@@ -855,16 +793,11 @@ def _detect_five_candle(
             detection_time=detection_time,
         )
 
-    # Falling Three Methods
-
     if (
         _bearish(first)
         and _bearish(fifth)
         and _body(fifth) > _body(first) * 0.5
-        and all(
-            _bullish(item)
-            for item in middle_candles
-        )
+        and all(_bullish(item) for item in middle_candles)
         and all(
             float(item["high"]) <= float(first["high"])
             and float(item["low"]) >= float(first["low"])
@@ -872,7 +805,6 @@ def _detect_five_candle(
         )
         and float(fifth["close"]) < float(first["low"])
     ):
-
         _add_pattern(
             patterns,
             name="Falling Three Methods",
@@ -901,6 +833,8 @@ class CandlestickPatternDetector:
             columns=OUTPUT_COLUMNS
         )
 
+        self._known_ids: set[str] = set()
+
     @property
     def history(self) -> pd.DataFrame:
         """Return a copy of detection history."""
@@ -915,6 +849,8 @@ class CandlestickPatternDetector:
         self._history = pd.DataFrame(
             columns=OUTPUT_COLUMNS
         )
+
+        self._known_ids.clear()
 
     def detect(
         self,
@@ -953,7 +889,6 @@ class CandlestickPatternDetector:
         patterns = []
 
         for index in range(len(candles)):
-
             _detect_single_candle(
                 candles,
                 index,
@@ -994,39 +929,45 @@ class CandlestickPatternDetector:
         if detected.empty:
             return detected
 
-        # Remove duplicate IDs within this detection batch.
-
         detected = detected.drop_duplicates(
             subset=["pattern_id"],
             keep="first",
-        )
+        ).reset_index(drop=True)
 
-        # Preserve historical detections.
-
-        if not self._history.empty:
-
-            known_ids = set(
-                self._history["pattern_id"]
-            )
-
+        if self._known_ids:
             detected = detected.loc[
                 ~detected["pattern_id"].isin(
-                    known_ids
+                    self._known_ids
                 )
-            ]
+            ].reset_index(drop=True)
 
-        if not detected.empty:
+        if detected.empty:
+            return detected
 
-            self._history = pd.concat(
-                [
-                    self._history,
-                    detected,
-                ],
-                ignore_index=True,
+        # Append rows without concatenating DataFrames.
+        # This avoids pandas concat dtype warnings.
+
+        new_records = detected.to_dict(
+            orient="records"
+        )
+
+        if self._history.empty:
+            self._history = detected.copy(
+                deep=True
+            )
+        else:
+            self._history = pd.DataFrame.from_records(
+                self._history.to_dict(orient="records")
+                + new_records,
+                columns=OUTPUT_COLUMNS,
             )
 
-        return detected.reset_index(
-            drop=True
+        self._known_ids.update(
+            detected["pattern_id"].tolist()
+        )
+
+        return detected.copy(
+            deep=True
         )
 
 
