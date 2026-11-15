@@ -5,16 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import math
 from typing import Any
 
 import pandas as pd
 
 from market_analysis.structure import (
-    BOS,
-    CHOCH,
-    BULLISH,
     BEARISH,
-    NEUTRAL,
+    BULLISH,
     PriceStructureError,
     analyze_price_structure,
 )
@@ -60,9 +58,7 @@ def _normalize_utc(
     """Validate and normalize a timestamp to UTC."""
 
     if value is None:
-        return pd.Timestamp(
-            datetime.now(timezone.utc)
-        )
+        return pd.Timestamp(datetime.now(timezone.utc))
 
     try:
         timestamp = pd.Timestamp(value)
@@ -90,9 +86,7 @@ def _normalize_utc(
     return timestamp.tz_convert("UTC")
 
 
-def _validate_timeframe(
-    timeframe: str,
-) -> int:
+def _validate_timeframe(timeframe: str) -> int:
     """Return the configured timeframe duration."""
 
     if not isinstance(timeframe, str):
@@ -141,14 +135,13 @@ def _validate_parameters(
 
     if (
         isinstance(liquidity_tolerance, bool)
-        or not isinstance(
-            liquidity_tolerance,
-            (int, float),
-        )
+        or not isinstance(liquidity_tolerance, (int, float))
+        or not math.isfinite(liquidity_tolerance)
         or liquidity_tolerance < 0
     ):
         raise MarketStructureAnalyzerError(
-            "liquidity_tolerance must be a non-negative number."
+            "liquidity_tolerance must be a finite "
+            "non-negative number."
         )
 
 
@@ -157,7 +150,7 @@ def _validate_timeframe_candles(
     timeframe: str,
     analysis_time: pd.Timestamp,
 ) -> pd.DataFrame:
-    """Validate candle duration and chronological integrity."""
+    """Validate candle timestamps, duration and chronology."""
 
     if not isinstance(data, pd.DataFrame):
         raise TypeError(
@@ -181,36 +174,23 @@ def _validate_timeframe_candles(
             + ", ".join(missing)
         )
 
-    interval_seconds = _validate_timeframe(
-        timeframe
-    )
+    interval_seconds = _validate_timeframe(timeframe)
 
-    candles = data.loc[
-        :,
-        REQUIRED_COLUMNS,
-    ].copy(deep=True)
+    candles = data.loc[:, REQUIRED_COLUMNS].copy(deep=True)
 
     for column in ("open_time", "close_time"):
-
         try:
             timestamps = pd.to_datetime(
                 candles[column],
                 errors="raise",
             )
 
-        except (
-            TypeError,
-            ValueError,
-            OverflowError,
-        ) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise MarketStructureAnalyzerError(
                 f"Invalid timestamps in {column}."
             ) from exc
 
-        if not isinstance(
-            timestamps.dtype,
-            pd.DatetimeTZDtype,
-        ):
+        if not isinstance(timestamps.dtype, pd.DatetimeTZDtype):
             raise MarketStructureAnalyzerError(
                 f"{column} must contain timezone-aware timestamps."
             )
@@ -228,17 +208,13 @@ def _validate_timeframe_candles(
         candles[column] = timestamps
 
     if (
-        candles["close_time"]
-        <= candles["open_time"]
+        candles["close_time"] <= candles["open_time"]
     ).any():
         raise MarketStructureAnalyzerError(
             "Every candle must close after it opens."
         )
 
-    durations = (
-        candles["close_time"]
-        - candles["open_time"]
-    )
+    durations = candles["close_time"] - candles["open_time"]
 
     expected_duration = pd.Timedelta(
         seconds=interval_seconds
@@ -246,14 +222,10 @@ def _validate_timeframe_candles(
 
     if not durations.eq(expected_duration).all():
         raise MarketStructureAnalyzerError(
-            "Candle duration does not match "
-            f"timeframe '{timeframe}'."
+            f"Candle duration does not match timeframe '{timeframe}'."
         )
 
-    if (
-        candles["close_time"]
-        > analysis_time
-    ).any():
+    if (candles["close_time"] > analysis_time).any():
         raise MarketStructureAnalyzerError(
             "Future or unclosed candles are not allowed."
         )
@@ -289,23 +261,13 @@ def _build_liquidity_zones(
 
     zones = []
 
-    swings = structure.get(
-        "swings",
-        [],
-    )
-
-    for swing in swings:
-
-        classification = swing.get(
-            "classification"
-        )
+    for swing in structure.get("swings", []):
+        classification = swing.get("classification")
 
         if classification not in ("EQH", "EQL"):
             continue
 
-        price = float(
-            swing["price"]
-        )
+        price = float(swing["price"])
 
         zone = {
             "type": (
@@ -318,9 +280,7 @@ def _build_liquidity_zones(
             "lower_bound": price * (1 - tolerance),
             "upper_bound": price * (1 + tolerance),
             "time": swing["time"],
-            "confirmation_time": swing[
-                "confirmation_time"
-            ],
+            "confirmation_time": swing["confirmation_time"],
             "status": "CONFIRMED",
         }
 
@@ -347,54 +307,41 @@ def _detect_liquidity_sweeps(
     sweeps = []
 
     for swing in structure.get("swings", []):
-
         swing_type = swing.get("type")
 
         if swing_type not in ("HIGH", "LOW"):
             continue
 
-        confirmation_index = swing.get(
-            "confirmation_index"
-        )
+        confirmation_index = swing.get("confirmation_index")
 
         if (
             isinstance(confirmation_index, bool)
             or not isinstance(confirmation_index, int)
             or confirmation_index < 0
+            or confirmation_index >= len(candles)
         ):
             continue
 
-        if confirmation_index >= len(candles):
-            continue
+        level = float(swing["price"])
 
-        level = float(
-            swing["price"]
-        )
-
-        for index in range(
-            confirmation_index + 1,
-            len(candles),
-        ):
-
+        for index in range(confirmation_index + 1, len(candles)):
             candle = candles.iloc[index]
 
             if swing_type == "HIGH":
-
                 swept = (
                     float(candle["high"]) > level
                     and float(candle["close"]) < level
                 )
-
                 sweep_type = "BUY_SIDE_SWEEP"
+                direction = BEARISH
 
             else:
-
                 swept = (
                     float(candle["low"]) < level
                     and float(candle["close"]) > level
                 )
-
                 sweep_type = "SELL_SIDE_SWEEP"
+                direction = BULLISH
 
             if not swept:
                 continue
@@ -402,28 +349,14 @@ def _detect_liquidity_sweeps(
             sweeps.append(
                 {
                     "type": sweep_type,
-                    "direction": (
-                        BEARISH
-                        if swing_type == "HIGH"
-                        else BULLISH
-                    ),
+                    "direction": direction,
                     "level": level,
                     "swing_time": swing["time"],
-                    "confirmation_time": (
-                        swing["confirmation_time"]
-                    ),
-                    "sweep_time": (
-                        candle["close_time"].isoformat()
-                    ),
-                    "sweep_high": float(
-                        candle["high"]
-                    ),
-                    "sweep_low": float(
-                        candle["low"]
-                    ),
-                    "close_price": float(
-                        candle["close"]
-                    ),
+                    "confirmation_time": swing["confirmation_time"],
+                    "sweep_time": candle["close_time"].isoformat(),
+                    "sweep_high": float(candle["high"]),
+                    "sweep_low": float(candle["low"]),
+                    "close_price": float(candle["close"]),
                     "status": "CONFIRMED",
                 }
             )
@@ -431,9 +364,7 @@ def _detect_liquidity_sweeps(
             # Only the first sweep of a swing level is recorded.
             break
 
-    sweeps.sort(
-        key=lambda item: item["sweep_time"]
-    )
+    sweeps.sort(key=lambda item: item["sweep_time"])
 
     return sweeps
 
@@ -443,20 +374,15 @@ def _calculate_fibonacci(
 ) -> dict[str, Any] | None:
     """Calculate retracement levels from the latest confirmed swing range."""
 
-    swings = structure.get(
-        "swings",
-        [],
-    )
+    swings = structure.get("swings", [])
 
     highs = [
-        swing
-        for swing in swings
+        swing for swing in swings
         if swing.get("type") == "HIGH"
     ]
 
     lows = [
-        swing
-        for swing in swings
+        swing for swing in swings
         if swing.get("type") == "LOW"
     ]
 
@@ -466,54 +392,30 @@ def _calculate_fibonacci(
     latest_high = highs[-1]
     latest_low = lows[-1]
 
-    high_price = float(
-        latest_high["price"]
-    )
-
-    low_price = float(
-        latest_low["price"]
-    )
+    high_price = float(latest_high["price"])
+    low_price = float(latest_low["price"])
 
     if high_price <= low_price:
         return None
 
-    high_time = pd.Timestamp(
-        latest_high["time"]
-    )
-
-    low_time = pd.Timestamp(
-        latest_low["time"]
-    )
+    high_time = pd.Timestamp(latest_high["time"])
+    low_time = pd.Timestamp(latest_low["time"])
 
     bullish_leg = low_time < high_time
-
     price_range = high_price - low_price
 
     levels = {}
 
     for ratio in FIBONACCI_LEVELS:
-
         if bullish_leg:
-            price = high_price - (
-                price_range * ratio
-            )
-
+            price = high_price - (price_range * ratio)
         else:
-            price = low_price + (
-                price_range * ratio
-            )
+            price = low_price + (price_range * ratio)
 
-        levels[f"{ratio:.3f}"] = round(
-            float(price),
-            8,
-        )
+        levels[f"{ratio:.3f}"] = round(float(price), 8)
 
     return {
-        "direction": (
-            BULLISH
-            if bullish_leg
-            else BEARISH
-        ),
+        "direction": BULLISH if bullish_leg else BEARISH,
         "swing_high": high_price,
         "swing_high_time": latest_high["time"],
         "swing_low": low_price,
@@ -545,9 +447,7 @@ def _build_analysis_id(
         separators=(",", ":"),
     ).encode("utf-8")
 
-    return hashlib.sha256(
-        encoded
-    ).hexdigest()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class MarketStructureAnalyzer:
@@ -579,11 +479,7 @@ class MarketStructureAnalyzer:
         liquidity_tolerance: float = 0.001,
     ) -> None:
 
-        self.timeframe = timeframe
-
-        _validate_timeframe(
-            timeframe
-        )
+        _validate_timeframe(timeframe)
 
         _validate_parameters(
             swing_window,
@@ -591,11 +487,10 @@ class MarketStructureAnalyzer:
             liquidity_tolerance,
         )
 
+        self.timeframe = timeframe
         self.swing_window = swing_window
         self.minimum_candles = minimum_candles
-        self.liquidity_tolerance = float(
-            liquidity_tolerance
-        )
+        self.liquidity_tolerance = float(liquidity_tolerance)
 
         self._history: list[dict[str, Any]] = []
         self._known_ids: set[str] = set()
@@ -605,9 +500,7 @@ class MarketStructureAnalyzer:
         """Return a defensive copy of analysis history."""
 
         return [
-            json.loads(
-                json.dumps(item)
-            )
+            json.loads(json.dumps(item))
             for item in self._history
         ]
 
@@ -665,9 +558,7 @@ class MarketStructureAnalyzer:
 
         analysis_timestamp = timestamp.isoformat()
 
-        last_close_time = (
-            candles["close_time"].iloc[-1].isoformat()
-        )
+        last_close_time = candles["close_time"].iloc[-1].isoformat()
 
         liquidity_zones = _build_liquidity_zones(
             structure,
@@ -679,9 +570,7 @@ class MarketStructureAnalyzer:
             structure,
         )
 
-        fibonacci = _calculate_fibonacci(
-            structure
-        )
+        fibonacci = _calculate_fibonacci(structure)
 
         result = {
             "analysis_id": _build_analysis_id(
@@ -701,31 +590,21 @@ class MarketStructureAnalyzer:
             "swing_lows": structure["swing_lows"],
             "swings": structure["swings"],
             "structure_breaks": structure["structure_breaks"],
-            "developing_structures": structure[
-                "developing_structures"
-            ],
+            "developing_structures": structure["developing_structures"],
             "liquidity_zones": liquidity_zones,
             "liquidity_sweeps": liquidity_sweeps,
             "fibonacci": fibonacci,
             "levels": structure["levels"],
             "summary": {
                 **structure["summary"],
-                "liquidity_zone_count": len(
-                    liquidity_zones
-                ),
-                "liquidity_sweep_count": len(
-                    liquidity_sweeps
-                ),
-                "fibonacci_available": (
-                    fibonacci is not None
-                ),
+                "liquidity_zone_count": len(liquidity_zones),
+                "liquidity_sweep_count": len(liquidity_sweeps),
+                "fibonacci_available": fibonacci is not None,
             },
             "parameters": {
                 "swing_window": self.swing_window,
                 "minimum_candles": self.minimum_candles,
-                "liquidity_tolerance": (
-                    self.liquidity_tolerance
-                ),
+                "liquidity_tolerance": self.liquidity_tolerance,
             },
             "limitations": [
                 "Only validated closed candles are analyzed.",
@@ -741,20 +620,13 @@ class MarketStructureAnalyzer:
         analysis_id = result["analysis_id"]
 
         if analysis_id not in self._known_ids:
-
             self._history.append(
-                json.loads(
-                    json.dumps(result)
-                )
+                json.loads(json.dumps(result))
             )
 
-            self._known_ids.add(
-                analysis_id
-            )
+            self._known_ids.add(analysis_id)
 
-        return json.loads(
-            json.dumps(result)
-        )
+        return json.loads(json.dumps(result))
 
 
 def analyze_market_structure(
