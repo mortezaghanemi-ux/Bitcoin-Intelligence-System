@@ -1,3 +1,4 @@
+
 """Bitcoin forecast performance analysis."""
 
 from __future__ import annotations
