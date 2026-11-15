@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-
 from typing import Any, Iterable
 
 
@@ -52,15 +51,48 @@ def _validate_probability(
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value < 0
-        or value > 1
     ):
         raise ForecastCalibrationError(
             f"{field_name} must be between 0 and 1."
         )
 
-    return float(value)
+    try:
+        numeric_value = float(value)
+
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ForecastCalibrationError(
+            f"{field_name} must be a valid finite probability."
+        ) from exc
+
+    if not math.isfinite(numeric_value):
+        raise ForecastCalibrationError(
+            f"{field_name} must be finite."
+        )
+
+    if not 0.0 <= numeric_value <= 1.0:
+        raise ForecastCalibrationError(
+            f"{field_name} must be between 0 and 1."
+        )
+
+    return numeric_value
+
+
+def _validate_direction(
+    value: Any,
+    field_name: str,
+) -> str:
+    """Validate a market direction safely."""
+
+    if (
+        not isinstance(value, str)
+        or value not in VALID_DIRECTIONS
+    ):
+        raise ForecastCalibrationError(
+            f"{field_name} must be one of "
+            "BULLISH, BEARISH, or NEUTRAL."
+        )
+
+    return value
 
 
 def _validate_record(
@@ -107,12 +139,10 @@ def _validate_record(
             "metadata must be a dictionary."
         )
 
-    actual_direction = actual.get("direction")
-
-    if actual_direction not in VALID_DIRECTIONS:
-        raise ForecastCalibrationError(
-            "Evaluation contains an invalid actual direction."
-        )
+    actual_direction = _validate_direction(
+        actual.get("direction"),
+        "actual_direction",
+    )
 
     probabilities = predicted.get("probabilities")
 
@@ -148,14 +178,10 @@ def _validate_record(
             "Probabilities must total 1.0."
         )
 
-    predicted_direction = predicted.get(
-        "predicted_direction"
+    predicted_direction = _validate_direction(
+        predicted.get("predicted_direction"),
+        "predicted_direction",
     )
-
-    if predicted_direction not in VALID_DIRECTIONS:
-        raise ForecastCalibrationError(
-            "Evaluation contains an invalid predicted direction."
-        )
 
     maximum_probability = max(
         normalized_probabilities.values()
@@ -400,20 +426,12 @@ def analyze_forecast_calibration(
     """
     Analyze multiclass forecast probability calibration.
 
-    Evaluation probabilities must be normalized values between
-    0 and 1, matching forecast/evaluation.py output.
-
-    The analyzer calculates one-vs-rest reliability bins
-    for BULLISH, BEARISH, and NEUTRAL outcomes.
-
-    Expected calibration error (ECE) is calculated as the
-    sample-weighted absolute difference between predicted
-    probability and observed outcome frequency.
+    Probabilities must be normalized values between zero and one.
 
     Overall ECE is the macro-average of the three class ECEs.
 
-    This module does not modify input records, retrain models,
-    or claim that a model is statistically calibrated.
+    This module does not modify input records or claim
+    statistical calibration of the forecasting model.
     """
 
     bin_count = _validate_integer(
