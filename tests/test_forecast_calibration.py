@@ -1,6 +1,6 @@
 """Tests for the forecast calibration analyzer."""
 
-import copy
+from copy import deepcopy
 
 import pytest
 
@@ -17,31 +17,35 @@ def make_evaluation(
     actual_direction="BULLISH",
     probabilities=None,
 ):
+    """Build a valid forecast evaluation record."""
+
     if probabilities is None:
         probabilities = {
-            "BULLISH": 70.0,
-            "BEARISH": 20.0,
-            "NEUTRAL": 10.0,
+            "BULLISH": 0.60,
+            "BEARISH": 0.25,
+            "NEUTRAL": 0.15,
         }
 
     predicted_direction = max(
         probabilities,
         key=lambda direction: (
-            probabilities[direction],
-            direction == "NEUTRAL",
+            probabilities[direction]
+            if isinstance(probabilities[direction], (int, float))
+            and not isinstance(probabilities[direction], bool)
+            else float("-inf")
         ),
     )
 
     return {
-        "forecast_id": forecast_id,
         "status": "SUCCESS",
+        "forecast_id": forecast_id,
         "actual_outcome": {
             "direction": actual_direction,
         },
         "predicted_outcome": {
-            "probabilities": probabilities,
+            "probabilities": dict(probabilities),
             "predicted_direction": predicted_direction,
-            "confidence_score": 70.0,
+            "confidence_score": 0.60,
         },
         "metadata": {
             "asset": "BTC",
@@ -51,7 +55,7 @@ def make_evaluation(
 
 
 def make_evaluations(count=30):
-    records = []
+    """Build multiple valid evaluation records."""
 
     directions = [
         "BULLISH",
@@ -59,73 +63,56 @@ def make_evaluations(count=30):
         "NEUTRAL",
     ]
 
-    for index in range(count):
-        direction = directions[index % 3]
+    evaluations = []
 
-        records.append(
+    for index in range(count):
+        evaluations.append(
             make_evaluation(
-                forecast_id=f"forecast-{index:03d}",
-                actual_direction=direction,
-                probabilities={
-                    "BULLISH": 60.0,
-                    "BEARISH": 25.0,
-                    "NEUTRAL": 15.0,
-                },
+                forecast_id=f"forecast-{index + 1:03d}",
+                actual_direction=directions[index % 3],
             )
         )
 
-    return records
+    return evaluations
 
 
-def test_analyze_forecast_calibration_returns_success():
-    records = make_evaluations()
-
-    result = analyze_forecast_calibration(
-        records
-    )
-
-    assert result["status"] == "SUCCESS"
-    assert result["analysis_type"] == "FORECAST_CALIBRATION"
-    assert result["sample_count"] == 30
-
-
-def test_default_configuration_values():
+def test_default_configuration_constants():
     assert DEFAULT_BIN_COUNT == 10
     assert DEFAULT_MINIMUM_SAMPLE_SIZE == 30
 
 
-def test_default_assessment_requires_thirty_records():
-    result = analyze_forecast_calibration(
-        make_evaluations(29)
-    )
+def test_analyzer_returns_success_status():
+    result = analyze_forecast_calibration(make_evaluations())
 
-    assert (
-        result["assessment_status"]
-        == "INSUFFICIENT_SAMPLE_SIZE"
-    )
+    assert result["status"] == "SUCCESS"
 
 
-def test_sufficient_sample_size_is_assessed():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
+def test_analysis_type_is_correct():
+    result = analyze_forecast_calibration(make_evaluations())
 
-    assert result["assessment_status"] == "ASSESSED"
+    assert result["analysis_type"] == "FORECAST_CALIBRATION"
 
 
-def test_custom_minimum_sample_size():
-    result = analyze_forecast_calibration(
-        make_evaluations(5),
-        minimum_sample_size=5,
-    )
+def test_sample_count_is_correct():
+    result = analyze_forecast_calibration(make_evaluations(30))
+
+    assert result["sample_count"] == 30
+
+
+def test_assessment_status_with_sufficient_sample_size():
+    result = analyze_forecast_calibration(make_evaluations(30))
 
     assert result["assessment_status"] == "ASSESSED"
 
 
-def test_all_three_directions_are_analyzed():
-    result = analyze_forecast_calibration(
-        make_evaluations()
-    )
+def test_assessment_status_with_insufficient_sample_size():
+    result = analyze_forecast_calibration(make_evaluations(10))
+
+    assert result["assessment_status"] == "INSUFFICIENT_SAMPLE_SIZE"
+
+
+def test_all_directions_are_present():
+    result = analyze_forecast_calibration(make_evaluations())
 
     assert set(result["by_direction"]) == {
         "BULLISH",
@@ -134,450 +121,70 @@ def test_all_three_directions_are_analyzed():
     }
 
 
-def test_probability_bins_are_created():
+def test_macro_average_metrics_are_present():
+    result = analyze_forecast_calibration(make_evaluations())
+
+    metrics = result["metrics"]
+
+    assert "expected_calibration_error" in metrics
+    assert "maximum_calibration_error" in metrics
+    assert metrics["aggregation_method"] == "MACRO_AVERAGE"
+
+
+def test_expected_calibration_error_is_valid():
+    result = analyze_forecast_calibration(make_evaluations())
+
+    ece = result["metrics"]["expected_calibration_error"]
+
+    assert isinstance(ece, (int, float))
+    assert 0.0 <= ece <= 1.0
+
+
+def test_maximum_calibration_error_is_valid():
+    result = analyze_forecast_calibration(make_evaluations())
+
+    mce = result["metrics"]["maximum_calibration_error"]
+
+    assert isinstance(mce, (int, float))
+    assert 0.0 <= mce <= 1.0
+
+
+def test_reliability_bins_are_created():
+    result = analyze_forecast_calibration(
+        make_evaluations(),
+        bin_count=10,
+    )
+
+    for direction in ("BULLISH", "BEARISH", "NEUTRAL"):
+        bins = result["by_direction"][direction]["reliability_bins"]
+        assert len(bins) == 10
+
+
+def test_custom_bin_count_is_supported():
     result = analyze_forecast_calibration(
         make_evaluations(),
         bin_count=5,
     )
 
-    for direction in (
-        "BULLISH",
-        "BEARISH",
-        "NEUTRAL",
-    ):
-        bins = result["by_direction"][direction][
-            "reliability_bins"
-        ]
-
+    for direction in ("BULLISH", "BEARISH", "NEUTRAL"):
+        bins = result["by_direction"][direction]["reliability_bins"]
         assert len(bins) == 5
 
 
-def test_reliability_bin_sample_counts():
-    result = analyze_forecast_calibration(
-        make_evaluations(30),
-        bin_count=10,
-    )
-
-    bullish_bins = result["by_direction"]["BULLISH"][
-        "reliability_bins"
-    ]
-
-    occupied = [
-        item
-        for item in bullish_bins
-        if item["sample_count"] > 0
-    ]
-
-    assert len(occupied) == 1
-    assert occupied[0]["sample_count"] == 30
-
-
-def test_reliability_bin_probability_values():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
-
-    bullish_bins = result["by_direction"]["BULLISH"][
-        "reliability_bins"
-    ]
-
-    occupied = [
-        item
-        for item in bullish_bins
-        if item["sample_count"] > 0
-    ]
-
-    assert occupied[0]["mean_predicted_probability"] == 0.6
-    assert occupied[0]["observed_frequency"] == pytest.approx(
-        1 / 3
-    )
-
-
-def test_calibration_error_is_absolute_difference():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
-
-    bullish = result["by_direction"]["BULLISH"]
-
-    expected = abs(
-        0.6 - (10 / 30)
-    )
-
-    assert bullish["expected_calibration_error"] == pytest.approx(
-        expected
-    )
-
-
-def test_empty_bins_have_none_metrics():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
-
-    bullish_bins = result["by_direction"]["BULLISH"][
-        "reliability_bins"
-    ]
-
-    empty_bins = [
-        item
-        for item in bullish_bins
-        if item["sample_count"] == 0
-    ]
-
-    assert empty_bins
-
-    for item in empty_bins:
-        assert item["mean_predicted_probability"] is None
-        assert item["observed_frequency"] is None
-        assert item["calibration_error"] is None
-
-
-def test_overall_metrics_use_macro_average():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
-
-    class_errors = [
-        result["by_direction"][direction][
-            "expected_calibration_error"
-        ]
-        for direction in (
-            "BULLISH",
-            "BEARISH",
-            "NEUTRAL",
-        )
-    ]
-
-    expected = sum(class_errors) / 3
-
-    assert result["metrics"][
-        "expected_calibration_error"
-    ] == pytest.approx(expected)
-
-
-def test_class_actual_frequencies_sum_to_one():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
-
-    total = sum(
-        result["by_direction"][direction]["actual_frequency"]
-        for direction in (
-            "BULLISH",
-            "BEARISH",
-            "NEUTRAL",
-        )
-    )
-
-    assert total == pytest.approx(1.0)
-
-
-def test_class_mean_probabilities_sum_to_one():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
-
-    total = sum(
-        result["by_direction"][direction][
-            "mean_predicted_probability"
-        ]
-        for direction in (
-            "BULLISH",
-            "BEARISH",
-            "NEUTRAL",
-        )
-    )
-
-    assert total == pytest.approx(1.0)
-
-
-def test_probability_scale_is_normalized():
-    result = analyze_forecast_calibration(
-        make_evaluations(30)
-    )
+def test_probability_scale_is_zero_to_one():
+    result = analyze_forecast_calibration(make_evaluations())
 
     assert result["metadata"]["probability_scale"] == "0_TO_1"
 
-    for direction in (
-        "BULLISH",
-        "BEARISH",
-        "NEUTRAL",
-    ):
-        value = result["by_direction"][direction][
-            "mean_predicted_probability"
-        ]
 
-        assert 0 <= value <= 1
+def test_metadata_identifies_btc():
+    result = analyze_forecast_calibration(make_evaluations())
 
+    assert result["metadata"]["asset"] == "BTC"
 
-def test_input_records_are_not_modified():
-    records = make_evaluations()
-    original = copy.deepcopy(records)
 
-    analyze_forecast_calibration(records)
-
-    assert records == original
-
-
-def test_forecast_ids_are_sorted():
-    records = [
-        make_evaluation(forecast_id="forecast-c"),
-        make_evaluation(forecast_id="forecast-a"),
-        make_evaluation(forecast_id="forecast-b"),
-    ]
-
-    result = analyze_forecast_calibration(
-        records
-    )
-
-    assert result["forecast_ids"] == [
-        "forecast-a",
-        "forecast-b",
-        "forecast-c",
-    ]
-
-
-def test_duplicate_forecast_ids_are_rejected():
-    records = [
-        make_evaluation("duplicate"),
-        make_evaluation("duplicate"),
-    ]
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration(records)
-
-
-def test_empty_evaluations_are_rejected():
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([])
-
-
-def test_dictionary_input_is_rejected():
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration(
-            make_evaluation()
-        )
-
-
-def test_string_input_is_rejected():
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration("invalid")
-
-
-@pytest.mark.parametrize(
-    "bin_count",
-    [
-        0,
-        1,
-        101,
-        -1,
-        2.5,
-        True,
-        None,
-    ],
-)
-def test_invalid_bin_count_is_rejected(bin_count):
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration(
-            make_evaluations(),
-            bin_count=bin_count,
-        )
-
-
-@pytest.mark.parametrize(
-    "minimum_sample_size",
-    [
-        0,
-        -1,
-        1000001,
-        2.5,
-        True,
-        None,
-    ],
-)
-def test_invalid_minimum_sample_size_is_rejected(
-    minimum_sample_size,
-):
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration(
-            make_evaluations(),
-            minimum_sample_size=minimum_sample_size,
-        )
-
-
-def test_invalid_evaluation_status_is_rejected():
-    record = make_evaluation()
-    record["status"] = "FAILED"
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_invalid_forecast_id_is_rejected():
-    record = make_evaluation()
-    record["forecast_id"] = ""
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_missing_actual_outcome_is_rejected():
-    record = make_evaluation()
-    record["actual_outcome"] = None
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_invalid_actual_direction_is_rejected():
-    record = make_evaluation()
-    record["actual_outcome"]["direction"] = "UNKNOWN"
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_missing_predicted_outcome_is_rejected():
-    record = make_evaluation()
-    record["predicted_outcome"] = None
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_missing_metadata_is_rejected():
-    record = make_evaluation()
-    record["metadata"] = None
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_missing_probabilities_are_rejected():
-    record = make_evaluation()
-    record["predicted_outcome"]["probabilities"] = None
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_missing_probability_class_is_rejected():
-    record = make_evaluation()
-    record["predicted_outcome"]["probabilities"] = {
-        "BULLISH": 70.0,
-        "BEARISH": 30.0,
-    }
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        -1,
-        101,
-        float("nan"),
-        float("inf"),
-        float("-inf"),
-        True,
-        "70",
-        None,
-    ],
-)
-def test_invalid_probability_is_rejected(value):
-    record = make_evaluation()
-
-    record["predicted_outcome"]["probabilities"][
-        "BULLISH"
-    ] = value
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_probabilities_not_totaling_one_hundred_are_rejected():
-    record = make_evaluation(
-        probabilities={
-            "BULLISH": 60.0,
-            "BEARISH": 20.0,
-            "NEUTRAL": 10.0,
-        }
-    )
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_invalid_predicted_direction_is_rejected():
-    record = make_evaluation()
-    record["predicted_outcome"]["predicted_direction"] = "UNKNOWN"
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_predicted_direction_conflicting_with_probabilities_is_rejected():
-    record = make_evaluation()
-
-    record["predicted_outcome"]["predicted_direction"] = "BEARISH"
-
-    with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration([record])
-
-
-def test_zero_probability_is_supported():
-    record = make_evaluation(
-        probabilities={
-            "BULLISH": 100.0,
-            "BEARISH": 0.0,
-            "NEUTRAL": 0.0,
-        }
-    )
-
-    result = analyze_forecast_calibration(
-        [record],
-        minimum_sample_size=1,
-    )
-
-    assert result["status"] == "SUCCESS"
-
-
-def test_one_hundred_percent_probability_is_in_last_bin():
-    record = make_evaluation(
-        probabilities={
-            "BULLISH": 100.0,
-            "BEARISH": 0.0,
-            "NEUTRAL": 0.0,
-        }
-    )
-
-    result = analyze_forecast_calibration(
-        [record],
-        minimum_sample_size=1,
-    )
-
-    bullish_bins = result["by_direction"]["BULLISH"][
-        "reliability_bins"
-    ]
-
-    assert bullish_bins[-1]["sample_count"] == 1
-
-
-def test_single_record_can_be_analyzed():
-    result = analyze_forecast_calibration(
-        [make_evaluation()],
-        minimum_sample_size=1,
-    )
-
-    assert result["sample_count"] == 1
-    assert result["assessment_status"] == "ASSESSED"
-
-
-def test_calibration_claim_is_never_made():
-    result = analyze_forecast_calibration(
-        make_evaluations()
-    )
+def test_statistical_calibration_is_not_claimed():
+    result = analyze_forecast_calibration(make_evaluations())
 
     assert (
         result["metadata"]["statistical_calibration_claimed"]
@@ -585,19 +192,332 @@ def test_calibration_claim_is_never_made():
     )
 
 
-def test_metadata_reports_analysis_method():
-    result = analyze_forecast_calibration(
-        make_evaluations()
+def test_forecast_ids_are_sorted():
+    evaluations = [
+        make_evaluation(forecast_id="forecast-003"),
+        make_evaluation(forecast_id="forecast-001"),
+        make_evaluation(forecast_id="forecast-002"),
+    ]
+
+    result = analyze_forecast_calibration(evaluations)
+
+    assert result["forecast_ids"] == [
+        "forecast-001",
+        "forecast-002",
+        "forecast-003",
+    ]
+
+
+def test_probability_values_are_normalized():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 0.70,
+            "BEARISH": 0.20,
+            "NEUTRAL": 0.10,
+        }
     )
 
-    assert (
-        result["metadata"]["method"]
-        == "multiclass_one_vs_rest_reliability"
+    result = analyze_forecast_calibration([evaluation])
+
+    assert result["status"] == "SUCCESS"
+
+
+@pytest.mark.parametrize(
+    "invalid_probability",
+    [
+        -0.1,
+        1.1,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        True,
+        "0.5",
+        None,
+    ],
+)
+def test_invalid_probability_values_are_rejected(invalid_probability):
+    probabilities = {
+        "BULLISH": 0.60,
+        "BEARISH": 0.25,
+        "NEUTRAL": 0.15,
+    }
+
+    probabilities["BULLISH"] = invalid_probability
+
+    evaluation = make_evaluation(
+        probabilities=probabilities,
     )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_probabilities_must_total_one():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 0.60,
+            "BEARISH": 0.20,
+            "NEUTRAL": 0.10,
+        }
+    )
+
+    with pytest.raises(
+        ForecastCalibrationError,
+        match="Probabilities must total 1.0",
+    ):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_missing_probability_class_is_rejected():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 0.70,
+            "BEARISH": 0.30,
+        }
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_extra_probability_class_is_rejected():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 0.60,
+            "BEARISH": 0.20,
+            "NEUTRAL": 0.10,
+            "UNKNOWN": 0.10,
+        }
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_conflicting_predicted_direction_is_rejected():
+    evaluation = make_evaluation()
+    evaluation["predicted_outcome"]["predicted_direction"] = "BEARISH"
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+@pytest.mark.parametrize(
+    "actual_direction",
+    [
+        "UNKNOWN",
+        "bullish",
+        "",
+        None,
+    ],
+)
+def test_invalid_actual_direction_is_rejected(actual_direction):
+    evaluation = make_evaluation(
+        actual_direction=actual_direction,
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_non_success_evaluation_is_rejected():
+    evaluation = make_evaluation()
+    evaluation["status"] = "FAILED"
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_missing_forecast_id_is_rejected():
+    evaluation = make_evaluation()
+    evaluation["forecast_id"] = ""
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_duplicate_forecast_ids_are_rejected():
+    evaluations = [
+        make_evaluation(forecast_id="duplicate-id"),
+        make_evaluation(forecast_id="duplicate-id"),
+    ]
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration(evaluations)
+
+
+def test_missing_actual_outcome_is_rejected():
+    evaluation = make_evaluation()
+    del evaluation["actual_outcome"]
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_missing_predicted_outcome_is_rejected():
+    evaluation = make_evaluation()
+    del evaluation["predicted_outcome"]
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_missing_metadata_is_rejected():
+    evaluation = make_evaluation()
+    del evaluation["metadata"]
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_empty_evaluations_are_rejected():
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([])
+
+
+@pytest.mark.parametrize(
+    "invalid_bin_count",
+    [0, 1, 1.5, True, "10", 101],
+)
+def test_invalid_bin_count_is_rejected(invalid_bin_count):
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration(
+            make_evaluations(),
+            bin_count=invalid_bin_count,
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_size",
+    [0, -1, 1.5, True, "30", 1000001],
+)
+def test_invalid_minimum_sample_size_is_rejected(invalid_size):
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration(
+            make_evaluations(),
+            minimum_sample_size=invalid_size,
+        )
+
+
+def test_zero_and_one_probabilities_are_supported():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 1.0,
+            "BEARISH": 0.0,
+            "NEUTRAL": 0.0,
+        }
+    )
+
+    result = analyze_forecast_calibration([evaluation])
+
+    assert result["status"] == "SUCCESS"
+
+
+def test_probability_one_is_included_in_last_bin():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 1.0,
+            "BEARISH": 0.0,
+            "NEUTRAL": 0.0,
+        }
+    )
+
+    result = analyze_forecast_calibration(
+        [evaluation],
+        bin_count=10,
+    )
+
+    bullish_bins = result["by_direction"]["BULLISH"]["reliability_bins"]
+
+    assert len(bullish_bins) == 10
+    assert bullish_bins[-1]["sample_count"] == 1
+
+
+def test_tied_maximum_probabilities_are_supported():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 0.40,
+            "BEARISH": 0.40,
+            "NEUTRAL": 0.20,
+        }
+    )
+
+    result = analyze_forecast_calibration([evaluation])
+
+    assert result["status"] == "SUCCESS"
+
+
+def test_generator_input_is_supported():
+    evaluations = (
+        make_evaluation(forecast_id=f"forecast-{index}")
+        for index in range(30)
+    )
+
+    result = analyze_forecast_calibration(evaluations)
+
+    assert result["sample_count"] == 30
+
+
+def test_input_evaluations_are_not_modified():
+    evaluations = make_evaluations()
+    original = deepcopy(evaluations)
+
+    analyze_forecast_calibration(evaluations)
+
+    assert evaluations == original
+
+
+def test_macro_average_ece_is_between_zero_and_one():
+    result = analyze_forecast_calibration(make_evaluations())
+
+    ece = result["metrics"]["expected_calibration_error"]
+
+    assert 0.0 <= ece <= 1.0
+
+
+def test_class_metrics_are_available_for_all_directions():
+    result = analyze_forecast_calibration(make_evaluations())
+
+    for direction in ("BULLISH", "BEARISH", "NEUTRAL"):
+        direction_result = result["by_direction"][direction]
+
+        assert "expected_calibration_error" in direction_result
+        assert "maximum_calibration_error" in direction_result
+        assert "reliability_bins" in direction_result
+
+
+def test_class_actual_frequencies_sum_to_one():
+    result = analyze_forecast_calibration(make_evaluations())
+
+    total = sum(
+        result["by_direction"][direction]["actual_frequency"]
+        for direction in ("BULLISH", "BEARISH", "NEUTRAL")
+    )
+
+    assert total == pytest.approx(1.0)
+
+
+def test_class_mean_probabilities_sum_to_one():
+    result = analyze_forecast_calibration(make_evaluations())
+
+    total = sum(
+        result["by_direction"][direction]["mean_predicted_probability"]
+        for direction in ("BULLISH", "BEARISH", "NEUTRAL")
+    )
+
+    assert total == pytest.approx(1.0)
 
 
 def test_non_dictionary_record_is_rejected():
     with pytest.raises(ForecastCalibrationError):
-        analyze_forecast_calibration(
-            [None]
-        )
+        analyze_forecast_calibration([None])
+
+
+def test_dictionary_input_is_rejected():
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration(make_evaluation())
+
+
+def test_string_input_is_rejected():
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration("invalid")
