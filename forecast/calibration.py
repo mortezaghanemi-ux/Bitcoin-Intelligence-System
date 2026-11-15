@@ -47,20 +47,20 @@ def _validate_probability(
     value: Any,
     field_name: str,
 ) -> float:
-    """Validate a probability expressed as a percentage."""
+    """Validate a normalized probability between zero and one."""
 
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
         or not math.isfinite(value)
         or value < 0
-        or value > 100
+        or value > 1
     ):
         raise ForecastCalibrationError(
-            f"{field_name} must be between 0 and 100."
+            f"{field_name} must be between 0 and 1."
         )
 
-    return float(value) / 100.0
+    return float(value)
 
 
 def _validate_record(
@@ -145,7 +145,7 @@ def _validate_record(
         abs_tol=0.0001,
     ):
         raise ForecastCalibrationError(
-            "Probabilities must total 100 percent."
+            "Probabilities must total 1.0."
         )
 
     predicted_direction = predicted.get(
@@ -157,12 +157,15 @@ def _validate_record(
             "Evaluation contains an invalid predicted direction."
         )
 
-    if predicted_direction != max(
-        VALID_DIRECTIONS,
-        key=lambda direction: (
-            normalized_probabilities[direction],
-            direction == "NEUTRAL",
-        ),
+    maximum_probability = max(
+        normalized_probabilities.values()
+    )
+
+    if not math.isclose(
+        normalized_probabilities[predicted_direction],
+        maximum_probability,
+        rel_tol=0.0,
+        abs_tol=0.0000001,
     ):
         raise ForecastCalibrationError(
             "Predicted direction conflicts with probabilities."
@@ -397,8 +400,8 @@ def analyze_forecast_calibration(
     """
     Analyze multiclass forecast probability calibration.
 
-    Probabilities are interpreted as percentages in the
-    evaluation records and normalized to the range 0..1.
+    Evaluation probabilities must be normalized values between
+    0 and 1, matching forecast/evaluation.py output.
 
     The analyzer calculates one-vs-rest reliability bins
     for BULLISH, BEARISH, and NEUTRAL outcomes.
@@ -451,9 +454,7 @@ def analyze_forecast_calibration(
     seen_ids = set()
 
     for source_record in source_records:
-        record = _validate_record(
-            source_record
-        )
+        record = _validate_record(source_record)
 
         forecast_id = record["forecast_id"]
 
@@ -480,10 +481,11 @@ def analyze_forecast_calibration(
 
     sample_count = len(records)
 
-    if sample_count < minimum_sample_size:
-        assessment_status = "INSUFFICIENT_SAMPLE_SIZE"
-    else:
-        assessment_status = "ASSESSED"
+    assessment_status = (
+        "ASSESSED"
+        if sample_count >= minimum_sample_size
+        else "INSUFFICIENT_SAMPLE_SIZE"
+    )
 
     return {
         "status": "SUCCESS",
