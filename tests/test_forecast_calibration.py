@@ -1,5 +1,6 @@
 """Tests for the forecast calibration analyzer."""
 
+import math
 from copy import deepcopy
 
 import pytest
@@ -521,3 +522,143 @@ def test_dictionary_input_is_rejected():
 def test_string_input_is_rejected():
     with pytest.raises(ForecastCalibrationError):
         analyze_forecast_calibration("invalid")
+
+
+@pytest.mark.parametrize(
+    "invalid_direction",
+    [
+        None,
+        "",
+        "bullish",
+        "UNKNOWN",
+        [],
+        {},
+        123,
+    ],
+)
+def test_invalid_actual_direction_types_are_rejected(
+    invalid_direction,
+):
+    evaluation = make_evaluation(
+        actual_direction=invalid_direction,
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+@pytest.mark.parametrize(
+    "invalid_direction",
+    [
+        None,
+        "",
+        "bullish",
+        "UNKNOWN",
+        [],
+        {},
+        123,
+    ],
+)
+def test_invalid_predicted_direction_types_are_rejected(
+    invalid_direction,
+):
+    evaluation = make_evaluation()
+    evaluation["predicted_outcome"]["predicted_direction"] = (
+        invalid_direction
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_extremely_large_probability_integer_is_rejected():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 10**10000,
+            "BEARISH": 0.0,
+            "NEUTRAL": 0.0,
+        }
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_extremely_large_probability_float_is_rejected():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": float("inf"),
+            "BEARISH": 0.0,
+            "NEUTRAL": 0.0,
+        }
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration([evaluation])
+
+
+def test_non_iterable_input_is_rejected():
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration(None)
+
+
+def test_invalid_record_inside_generator_is_rejected():
+    evaluations = (
+        item
+        for item in [
+            make_evaluation(),
+            None,
+        ]
+    )
+
+    with pytest.raises(ForecastCalibrationError):
+        analyze_forecast_calibration(evaluations)
+
+
+def test_probability_validation_does_not_modify_input():
+    evaluation = make_evaluation()
+    original = deepcopy(evaluation)
+
+    analyze_forecast_calibration([evaluation])
+
+    assert evaluation == original
+
+
+def test_all_directions_with_zero_probability_are_supported():
+    evaluation = make_evaluation(
+        probabilities={
+            "BULLISH": 1.0,
+            "BEARISH": 0.0,
+            "NEUTRAL": 0.0,
+        }
+    )
+
+    result = analyze_forecast_calibration([evaluation])
+
+    for direction in ("BULLISH", "BEARISH", "NEUTRAL"):
+        assert direction in result["by_direction"]
+
+
+def test_calibration_errors_remain_finite():
+    result = analyze_forecast_calibration(
+        make_evaluations(30)
+    )
+
+    for direction in ("BULLISH", "BEARISH", "NEUTRAL"):
+        metrics = result["by_direction"][direction]
+
+        assert math.isfinite(
+            metrics["expected_calibration_error"]
+        )
+
+        assert math.isfinite(
+            metrics["maximum_calibration_error"]
+        )
+
+    assert math.isfinite(
+        result["metrics"]["expected_calibration_error"]
+    )
+
+    assert math.isfinite(
+        result["metrics"]["maximum_calibration_error"]
+    )
