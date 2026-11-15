@@ -1,4 +1,4 @@
-"""Tests for the trader order block and FVG detector."""
+"""Tests for the trader order block and fair value gap detector."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -13,30 +13,18 @@ from trader.order_blocks.detector import (
 
 
 UTC = timezone.utc
-CHECK_TIME = datetime(
-    2026, 11, 13, 12, 0, tzinfo=UTC
-)
-
+CHECK_TIME = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 MINIMUM_CANDLES = 30
 
 
-def make_candles(
-    count=40,
-    timeframe_seconds=300,
-):
-    """Build deterministic valid OHLCV candles."""
-
-    start = datetime(
-        2026, 11, 13, 8, 0, tzinfo=UTC
-    )
-
+def make_candles(count=40, timeframe_seconds=300):
+    start = datetime(2026, 11, 13, 8, 0, tzinfo=UTC)
     rows = []
 
     for index in range(count):
         open_time = start + timedelta(
             seconds=index * timeframe_seconds
         )
-
         close_time = open_time + timedelta(
             seconds=timeframe_seconds
         )
@@ -56,139 +44,99 @@ def make_candles(
 
 
 def make_detector(**kwargs):
-    """Create a detector with test defaults."""
-
-    kwargs.setdefault(
-        "minimum_candles",
-        MINIMUM_CANDLES,
-    )
-
-    return OrderBlockDetector(
-        timeframe="5m",
-        **kwargs,
-    )
+    kwargs.setdefault("minimum_candles", MINIMUM_CANDLES)
+    return OrderBlockDetector(timeframe="5m", **kwargs)
 
 
 def make_bullish_order_block_data():
-    """Create data containing a bullish order block."""
-
     data = make_candles()
 
     data.loc[20, [
         "open", "high", "low", "close"
-    ]] = [
-        101.0, 101.5, 99.0, 99.5
-    ]
+    ]] = [101.0, 101.5, 99.0, 99.5]
 
     data.loc[21, [
         "open", "high", "low", "close"
-    ]] = [
-        99.5, 102.0, 99.4, 101.5
-    ]
+    ]] = [99.5, 102.0, 99.4, 101.5]
 
+    # Keep subsequent candles above the bullish order block.
     for index in range(22, len(data)):
         data.loc[index, [
             "open", "high", "low", "close"
-        ]] = [
-            101.5, 102.0, 101.0, 101.7
-        ]
+        ]] = [102.5, 103.0, 102.0, 102.7]
 
     return data
 
 
 def make_bearish_order_block_data():
-    """Create data containing a bearish order block."""
-
     data = make_candles()
 
     data.loc[20, [
         "open", "high", "low", "close"
-    ]] = [
-        99.0, 101.0, 98.5, 100.5
-    ]
+    ]] = [99.0, 101.0, 98.5, 100.5]
 
     data.loc[21, [
         "open", "high", "low", "close"
-    ]] = [
-        100.5, 100.6, 97.0, 98.0
-    ]
+    ]] = [100.5, 100.6, 97.0, 98.0]
 
     for index in range(22, len(data)):
         data.loc[index, [
             "open", "high", "low", "close"
-        ]] = [
-            98.0, 98.5, 97.5, 97.8
-        ]
+        ]] = [97.8, 98.0, 97.0, 97.5]
 
     return data
 
 
 def make_bullish_fvg_data():
-    """Create data containing a bullish fair value gap."""
-
     data = make_candles()
 
     data.loc[10, [
         "open", "high", "low", "close"
-    ]] = [
-        100.0, 100.5, 99.5, 100.1
-    ]
+    ]] = [100.0, 100.5, 99.5, 100.1]
 
     data.loc[11, [
         "open", "high", "low", "close"
-    ]] = [
-        100.5, 102.0, 100.4, 101.8
-    ]
+    ]] = [100.5, 102.0, 100.4, 101.8]
 
     data.loc[12, [
         "open", "high", "low", "close"
-    ]] = [
-        101.5, 102.5, 101.0, 102.0
-    ]
+    ]] = [101.5, 102.5, 101.0, 102.0]
+
+    # Keep later candles above the bullish FVG.
+    for index in range(13, len(data)):
+        data.loc[index, [
+            "open", "high", "low", "close"
+        ]] = [102.0, 102.5, 101.5, 102.2]
 
     return data
 
 
 def make_bearish_fvg_data():
-    """Create data containing a bearish fair value gap."""
-
     data = make_candles()
 
     data.loc[10, [
         "open", "high", "low", "close"
-    ]] = [
-        100.0, 101.0, 99.5, 100.2
-    ]
+    ]] = [100.0, 101.0, 99.5, 100.2]
 
     data.loc[11, [
         "open", "high", "low", "close"
-    ]] = [
-        100.0, 100.1, 98.0, 98.2
-    ]
+    ]] = [100.0, 100.1, 98.0, 98.2]
 
     data.loc[12, [
         "open", "high", "low", "close"
-    ]] = [
-        98.5, 99.0, 97.5, 98.0
-    ]
+    ]] = [98.5, 99.0, 97.5, 98.0]
 
     return data
 
 
 # ---------------------------------------------------------
-# Configuration tests
+# Configuration
 # ---------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "timeframe",
-    ["5m", "15m", "1h", "4h"],
-)
+@pytest.mark.parametrize("timeframe", ["5m", "15m", "1h", "4h"])
 def test_supported_timeframes(timeframe):
-    detector = OrderBlockDetector(
-        timeframe=timeframe,
-    )
-
+    detector = OrderBlockDetector(timeframe=timeframe)
     assert detector.timeframe == timeframe
 
 
@@ -243,40 +191,33 @@ def test_default_configuration():
 
 
 # ---------------------------------------------------------
-# Timestamp tests
+# Timestamp validation
 # ---------------------------------------------------------
 
 
 def test_analysis_time_must_be_timezone_aware():
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
+        make_detector().detect(
             make_candles(),
             analysis_time=datetime(2026, 11, 13, 12, 0),
         )
 
 
 def test_analysis_time_must_use_utc():
-    detector = make_detector()
-
     non_utc = datetime(
         2026, 11, 13, 14, 0,
         tzinfo=timezone(timedelta(hours=2)),
     )
 
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
+        make_detector().detect(
             make_candles(),
             analysis_time=non_utc,
         )
 
 
 def test_missing_analysis_time_is_supported():
-    detector = make_detector()
-
-    result = detector.detect(make_candles())
-
+    result = make_detector().detect(make_candles())
     assert result["status"] == "SUCCESS"
 
 
@@ -285,52 +226,30 @@ def test_invalid_timestamp_values_are_rejected():
     data["open_time"] = data["open_time"].astype(object)
     data.loc[0, "open_time"] = "invalid"
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_naive_candle_timestamps_are_rejected():
     data = make_candles()
-
-    data["open_time"] = (
-        data["open_time"]
-        .dt.tz_localize(None)
-    )
-
-    detector = make_detector()
+    data["open_time"] = data["open_time"].dt.tz_localize(None)
 
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_non_utc_candle_timestamps_are_rejected():
     data = make_candles()
-
-    data["open_time"] = (
-        data["open_time"]
-        .dt.tz_convert("Europe/Berlin")
+    data["open_time"] = data["open_time"].dt.tz_convert(
+        "Europe/Berlin"
     )
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_future_candles_are_rejected():
     data = make_candles()
-
     future_open = CHECK_TIME + timedelta(minutes=5)
 
     data.loc[len(data) - 1, "open_time"] = future_open
@@ -338,51 +257,33 @@ def test_future_candles_are_rejected():
         future_open + timedelta(minutes=5)
     )
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_unclosed_candles_are_rejected():
     data = make_candles()
-
     data.loc[len(data) - 1, "close_time"] = (
         CHECK_TIME + timedelta(minutes=1)
     )
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 # ---------------------------------------------------------
-# Input validation tests
+# Input validation
 # ---------------------------------------------------------
 
 
 def test_non_dataframe_input_is_rejected():
-    detector = make_detector()
-
     with pytest.raises(TypeError):
-        detector.detect(
-            [],
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect([], analysis_time=CHECK_TIME)
 
 
 def test_empty_dataframe_is_rejected():
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
+        make_detector().detect(
             pd.DataFrame(),
             analysis_time=CHECK_TIME,
         )
@@ -391,20 +292,13 @@ def test_empty_dataframe_is_rejected():
 def test_missing_required_column_is_rejected():
     data = make_candles().drop(columns=["volume"])
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_insufficient_candles_are_rejected():
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
+        make_detector().detect(
             make_candles(count=10),
             analysis_time=CHECK_TIME,
         )
@@ -412,63 +306,37 @@ def test_insufficient_candles_are_rejected():
 
 def test_unsorted_candles_are_rejected():
     data = make_candles()
-
     data = pd.concat(
-        [
-            data.iloc[:10],
-            data.iloc[11:],
-            data.iloc[10:11],
-        ],
+        [data.iloc[:10], data.iloc[11:], data.iloc[10:11]],
         ignore_index=True,
     )
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_duplicate_open_times_are_rejected():
     data = make_candles()
     data.loc[1, "open_time"] = data.loc[0, "open_time"]
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_duplicate_close_times_are_rejected():
     data = make_candles()
     data.loc[1, "close_time"] = data.loc[0, "close_time"]
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_invalid_candle_duration_is_rejected():
     data = make_candles()
-
     data.loc[0, "close_time"] += timedelta(minutes=1)
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 @pytest.mark.parametrize(
@@ -477,17 +345,9 @@ def test_invalid_candle_duration_is_rejected():
 )
 @pytest.mark.parametrize(
     "bad_value",
-    [
-        float("nan"),
-        float("inf"),
-        -float("inf"),
-        "invalid",
-    ],
+    [float("nan"), float("inf"), -float("inf"), "invalid"],
 )
-def test_invalid_numeric_values_are_rejected(
-    column,
-    bad_value,
-):
+def test_invalid_numeric_values_are_rejected(column, bad_value):
     data = make_candles()
 
     if isinstance(bad_value, str):
@@ -495,43 +355,25 @@ def test_invalid_numeric_values_are_rejected(
 
     data.loc[0, column] = bad_value
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
-@pytest.mark.parametrize(
-    "column",
-    ["open", "high", "low", "close"],
-)
+@pytest.mark.parametrize("column", ["open", "high", "low", "close"])
 def test_non_positive_prices_are_rejected(column):
     data = make_candles()
     data.loc[0, column] = 0
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_negative_volume_is_rejected():
     data = make_candles()
     data.loc[0, "volume"] = -1
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 @pytest.mark.parametrize(
@@ -543,58 +385,39 @@ def test_boolean_numeric_values_are_rejected(column):
     data[column] = data[column].astype(object)
     data.loc[0, column] = True
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_invalid_ohlc_relationship_is_rejected():
     data = make_candles()
-
     data.loc[5, "high"] = 98.0
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 def test_invalid_source_is_rejected():
     data = make_candles()
     data.loc[0, "source"] = ""
 
-    detector = make_detector()
-
     with pytest.raises(OrderBlockDetectorError):
-        detector.detect(
-            data,
-            analysis_time=CHECK_TIME,
-        )
+        make_detector().detect(data, analysis_time=CHECK_TIME)
 
 
 # ---------------------------------------------------------
-# Order block detection tests
+# Order block detection
 # ---------------------------------------------------------
 
 
 def test_bullish_order_block_is_detected():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_order_block_data(),
         analysis_time=CHECK_TIME,
     )
 
     bullish = [
-        item
-        for item in result["order_blocks"]
+        item for item in result["order_blocks"]
         if item["type"] == "BULLISH_ORDER_BLOCK"
     ]
 
@@ -606,16 +429,13 @@ def test_bullish_order_block_is_detected():
 
 
 def test_bearish_order_block_is_detected():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bearish_order_block_data(),
         analysis_time=CHECK_TIME,
     )
 
     bearish = [
-        item
-        for item in result["order_blocks"]
+        item for item in result["order_blocks"]
         if item["type"] == "BEARISH_ORDER_BLOCK"
     ]
 
@@ -627,40 +447,20 @@ def test_bearish_order_block_is_detected():
 def test_order_block_has_deterministic_zone_id():
     data = make_bullish_order_block_data()
 
-    first = make_detector().detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    first = make_detector().detect(data, analysis_time=CHECK_TIME)
+    second = make_detector().detect(data, analysis_time=CHECK_TIME)
 
-    second = make_detector().detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
-
-    first_ids = [
-        item["zone_id"]
-        for item in first["order_blocks"]
+    assert [
+        item["zone_id"] for item in first["order_blocks"]
+    ] == [
+        item["zone_id"] for item in second["order_blocks"]
     ]
-
-    second_ids = [
-        item["zone_id"]
-        for item in second["order_blocks"]
-    ]
-
-    assert first_ids == second_ids
 
 
 def test_order_block_requires_displacement():
-    data = make_candles()
-
-    detector = make_detector(
-        displacement_threshold=0.5,
-    )
-
-    result = detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    result = make_detector(
+        displacement_threshold=0.5
+    ).detect(make_candles(), analysis_time=CHECK_TIME)
 
     assert result["order_blocks"] == []
 
@@ -670,22 +470,13 @@ def test_order_block_requires_opposite_candle():
 
     data.loc[20, [
         "open", "high", "low", "close"
-    ]] = [
-        100.0, 100.5, 99.5, 100.2
-    ]
+    ]] = [100.0, 100.5, 99.5, 100.2]
 
     data.loc[21, [
         "open", "high", "low", "close"
-    ]] = [
-        100.2, 103.0, 100.1, 102.0
-    ]
+    ]] = [100.2, 103.0, 100.1, 102.0]
 
-    detector = make_detector()
-
-    result = detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    result = make_detector().detect(data, analysis_time=CHECK_TIME)
 
     assert not any(
         item["type"] == "BULLISH_ORDER_BLOCK"
@@ -694,14 +485,10 @@ def test_order_block_requires_opposite_candle():
 
 
 def test_order_block_requires_minimum_body_ratio():
-    data = make_bullish_order_block_data()
-
-    detector = make_detector(
-        minimum_body_ratio=0.99,
-    )
-
-    result = detector.detect(
-        data,
+    result = make_detector(
+        minimum_body_ratio=0.99
+    ).detect(
+        make_bullish_order_block_data(),
         analysis_time=CHECK_TIME,
     )
 
@@ -709,9 +496,7 @@ def test_order_block_requires_minimum_body_ratio():
 
 
 def test_order_block_contains_origin_and_confirmation_times():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_order_block_data(),
         analysis_time=CHECK_TIME,
     )
@@ -727,21 +512,18 @@ def test_order_block_contains_origin_and_confirmation_times():
 
 
 # ---------------------------------------------------------
-# Fair value gap tests
+# Fair value gaps
 # ---------------------------------------------------------
 
 
 def test_bullish_fvg_is_detected():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_fvg_data(),
         analysis_time=CHECK_TIME,
     )
 
     bullish = [
-        item
-        for item in result["fair_value_gaps"]
+        item for item in result["fair_value_gaps"]
         if item["type"] == "BULLISH_FVG"
     ]
 
@@ -756,16 +538,13 @@ def test_bullish_fvg_is_detected():
 
 
 def test_bearish_fvg_is_detected():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bearish_fvg_data(),
         analysis_time=CHECK_TIME,
     )
 
     bearish = [
-        item
-        for item in result["fair_value_gaps"]
+        item for item in result["fair_value_gaps"]
         if item["type"] == "BEARISH_FVG"
     ]
 
@@ -774,14 +553,12 @@ def test_bearish_fvg_is_detected():
     gap = bearish[0]
 
     assert gap["direction"] == "BEARISH"
-    assert gap["lower"] == 99.5
-    assert gap["upper"] == 101.0
+    assert gap["lower"] == 99.0
+    assert gap["upper"] == 99.5
 
 
 def test_fvg_contains_consequent_encroachment():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_fvg_data(),
         analysis_time=CHECK_TIME,
     )
@@ -789,45 +566,27 @@ def test_fvg_contains_consequent_encroachment():
     assert result["fair_value_gaps"]
 
     gap = result["fair_value_gaps"][0]
+    expected = (gap["lower"] + gap["upper"]) / 2.0
 
-    expected_midpoint = (
-        gap["lower"] + gap["upper"]
-    ) / 2.0
-
-    assert gap["consequent_encroachment"] == expected_midpoint
-    assert gap["midpoint"] == expected_midpoint
+    assert gap["consequent_encroachment"] == expected
+    assert gap["midpoint"] == expected
 
 
 def test_fvg_zone_id_is_deterministic():
     data = make_bullish_fvg_data()
 
-    first = make_detector().detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    first = make_detector().detect(data, analysis_time=CHECK_TIME)
+    second = make_detector().detect(data, analysis_time=CHECK_TIME)
 
-    second = make_detector().detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
-
-    first_ids = [
-        item["zone_id"]
-        for item in first["fair_value_gaps"]
+    assert [
+        item["zone_id"] for item in first["fair_value_gaps"]
+    ] == [
+        item["zone_id"] for item in second["fair_value_gaps"]
     ]
-
-    second_ids = [
-        item["zone_id"]
-        for item in second["fair_value_gaps"]
-    ]
-
-    assert first_ids == second_ids
 
 
 def test_no_fvg_when_three_candle_gap_does_not_exist():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_candles(),
         analysis_time=CHECK_TIME,
     )
@@ -836,14 +595,12 @@ def test_no_fvg_when_three_candle_gap_does_not_exist():
 
 
 # ---------------------------------------------------------
-# Mitigation tests
+# Mitigation
 # ---------------------------------------------------------
 
 
 def test_unmitigated_bullish_order_block_remains_active():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_order_block_data(),
         analysis_time=CHECK_TIME,
     )
@@ -862,20 +619,12 @@ def test_bullish_order_block_full_mitigation_is_detected():
 
     data.loc[22, [
         "open", "high", "low", "close"
-    ]] = [
-        101.5, 102.0, 98.5, 99.0
-    ]
+    ]] = [101.5, 102.0, 98.5, 99.0]
 
-    detector = make_detector()
-
-    result = detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    result = make_detector().detect(data, analysis_time=CHECK_TIME)
 
     zone = next(
-        item
-        for item in result["order_blocks"]
+        item for item in result["order_blocks"]
         if item["type"] == "BULLISH_ORDER_BLOCK"
     )
 
@@ -889,20 +638,12 @@ def test_bearish_order_block_full_mitigation_is_detected():
 
     data.loc[22, [
         "open", "high", "low", "close"
-    ]] = [
-        98.0, 102.0, 97.5, 101.0
-    ]
+    ]] = [98.0, 102.0, 97.5, 101.0]
 
-    detector = make_detector()
-
-    result = detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    result = make_detector().detect(data, analysis_time=CHECK_TIME)
 
     zone = next(
-        item
-        for item in result["order_blocks"]
+        item for item in result["order_blocks"]
         if item["type"] == "BEARISH_ORDER_BLOCK"
     )
 
@@ -915,20 +656,12 @@ def test_bullish_fvg_mitigation_is_detected():
 
     data.loc[13, [
         "open", "high", "low", "close"
-    ]] = [
-        102.0, 102.2, 100.0, 100.5
-    ]
+    ]] = [102.0, 102.2, 100.0, 100.5]
 
-    detector = make_detector()
-
-    result = detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    result = make_detector().detect(data, analysis_time=CHECK_TIME)
 
     gap = next(
-        item
-        for item in result["fair_value_gaps"]
+        item for item in result["fair_value_gaps"]
         if item["type"] == "BULLISH_FVG"
     )
 
@@ -941,20 +674,12 @@ def test_bearish_fvg_mitigation_is_detected():
 
     data.loc[13, [
         "open", "high", "low", "close"
-    ]] = [
-        98.0, 101.5, 97.8, 100.5
-    ]
+    ]] = [98.0, 101.5, 97.8, 100.5]
 
-    detector = make_detector()
-
-    result = detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    result = make_detector().detect(data, analysis_time=CHECK_TIME)
 
     gap = next(
-        item
-        for item in result["fair_value_gaps"]
+        item for item in result["fair_value_gaps"]
         if item["type"] == "BEARISH_FVG"
     )
 
@@ -963,18 +688,13 @@ def test_bearish_fvg_mitigation_is_detected():
 
 
 def test_mitigation_is_not_applied_before_confirmation():
-    data = make_bullish_fvg_data()
-
-    detector = make_detector()
-
-    result = detector.detect(
-        data,
+    result = make_detector().detect(
+        make_bullish_fvg_data(),
         analysis_time=CHECK_TIME,
     )
 
     gap = next(
-        item
-        for item in result["fair_value_gaps"]
+        item for item in result["fair_value_gaps"]
         if item["type"] == "BULLISH_FVG"
     )
 
@@ -983,14 +703,12 @@ def test_mitigation_is_not_applied_before_confirmation():
 
 
 # ---------------------------------------------------------
-# Zone validation tests
+# Zone validation and output
 # ---------------------------------------------------------
 
 
 def test_detected_order_block_has_validation():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_order_block_data(),
         analysis_time=CHECK_TIME,
     )
@@ -1010,9 +728,7 @@ def test_detected_order_block_has_validation():
 
 
 def test_detected_fvg_has_validation():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_fvg_data(),
         analysis_time=CHECK_TIME,
     )
@@ -1025,15 +741,8 @@ def test_detected_fvg_has_validation():
     assert validation["zone_width"] > 0
 
 
-# ---------------------------------------------------------
-# Output and history tests
-# ---------------------------------------------------------
-
-
 def test_output_contains_required_fields():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_candles(),
         analysis_time=CHECK_TIME,
     )
@@ -1057,9 +766,7 @@ def test_output_contains_required_fields():
 
 
 def test_analysis_status_is_success():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_candles(),
         analysis_time=CHECK_TIME,
     )
@@ -1070,15 +777,8 @@ def test_analysis_status_is_success():
 def test_analysis_id_is_deterministic():
     data = make_candles()
 
-    first = make_detector().detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
-
-    second = make_detector().detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    first = make_detector().detect(data, analysis_time=CHECK_TIME)
+    second = make_detector().detect(data, analysis_time=CHECK_TIME)
 
     assert first["analysis_id"] == second["analysis_id"]
 
@@ -1086,11 +786,7 @@ def test_analysis_id_is_deterministic():
 def test_analysis_id_changes_with_analysis_time():
     data = make_candles()
 
-    first = make_detector().detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
-
+    first = make_detector().detect(data, analysis_time=CHECK_TIME)
     second = make_detector().detect(
         data,
         analysis_time=CHECK_TIME + timedelta(minutes=1),
@@ -1099,13 +795,14 @@ def test_analysis_id_changes_with_analysis_time():
     assert first["analysis_id"] != second["analysis_id"]
 
 
+# ---------------------------------------------------------
+# History
+# ---------------------------------------------------------
+
+
 def test_analysis_is_preserved_in_history():
     detector = make_detector()
-
-    detector.detect(
-        make_candles(),
-        analysis_time=CHECK_TIME,
-    )
+    detector.detect(make_candles(), analysis_time=CHECK_TIME)
 
     assert len(detector.history) == 1
 
@@ -1114,15 +811,8 @@ def test_duplicate_analysis_is_not_added_to_history():
     detector = make_detector()
     data = make_candles()
 
-    detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
-
-    detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
+    detector.detect(data, analysis_time=CHECK_TIME)
+    detector.detect(data, analysis_time=CHECK_TIME)
 
     assert len(detector.history) == 1
 
@@ -1131,11 +821,7 @@ def test_different_analysis_is_added_to_history():
     detector = make_detector()
     data = make_candles()
 
-    detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
-
+    detector.detect(data, analysis_time=CHECK_TIME)
     detector.detect(
         data,
         analysis_time=CHECK_TIME + timedelta(minutes=1),
@@ -1146,14 +832,9 @@ def test_different_analysis_is_added_to_history():
 
 def test_history_returns_defensive_copy():
     detector = make_detector()
-
-    detector.detect(
-        make_candles(),
-        analysis_time=CHECK_TIME,
-    )
+    detector.detect(make_candles(), analysis_time=CHECK_TIME)
 
     history = detector.history
-
     history[0]["status"] = "CHANGED"
 
     assert detector.history[0]["status"] == "SUCCESS"
@@ -1174,11 +855,7 @@ def test_result_mutation_does_not_change_history():
 
 def test_clear_removes_history():
     detector = make_detector()
-
-    detector.detect(
-        make_candles(),
-        analysis_time=CHECK_TIME,
-    )
+    detector.detect(make_candles(), analysis_time=CHECK_TIME)
 
     detector.clear()
 
@@ -1189,23 +866,13 @@ def test_analysis_does_not_modify_input_dataframe():
     data = make_bullish_order_block_data()
     original = data.copy(deep=True)
 
-    detector = make_detector()
+    make_detector().detect(data, analysis_time=CHECK_TIME)
 
-    detector.detect(
-        data,
-        analysis_time=CHECK_TIME,
-    )
-
-    pd.testing.assert_frame_equal(
-        data,
-        original,
-    )
+    pd.testing.assert_frame_equal(data, original)
 
 
 def test_summary_counts_match_detected_zones():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_bullish_fvg_data(),
         analysis_time=CHECK_TIME,
     )
@@ -1227,7 +894,7 @@ def test_summary_counts_match_detected_zones():
 
 
 # ---------------------------------------------------------
-# Timeframe and convenience function tests
+# Timeframes and convenience function
 # ---------------------------------------------------------
 
 
@@ -1244,8 +911,11 @@ def test_detector_accepts_supported_candle_durations(
     timeframe,
     seconds,
 ):
-    data = make_candles(
-        timeframe_seconds=seconds,
+    data = make_candles(timeframe_seconds=seconds)
+
+    # The analysis time must be after the final candle closes.
+    analysis_time = (
+        data.iloc[-1]["close_time"] + timedelta(minutes=1)
     )
 
     detector = OrderBlockDetector(
@@ -1255,7 +925,7 @@ def test_detector_accepts_supported_candle_durations(
 
     result = detector.detect(
         data,
-        analysis_time=CHECK_TIME,
+        analysis_time=analysis_time,
     )
 
     assert result["status"] == "SUCCESS"
@@ -1292,9 +962,7 @@ def test_convenience_function_supports_custom_parameters():
 
 
 def test_detector_does_not_generate_trading_orders():
-    detector = make_detector()
-
-    result = detector.detect(
+    result = make_detector().detect(
         make_candles(),
         analysis_time=CHECK_TIME,
     )
