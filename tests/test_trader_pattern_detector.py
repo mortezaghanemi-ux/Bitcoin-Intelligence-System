@@ -17,7 +17,7 @@ from trader.patterns.detector import (
 UTC = timezone.utc
 
 CHECK_TIME = datetime(
-    2026, 11, 13, 12, 0, tzinfo=UTC
+    2026, 11, 13, 13, 0, tzinfo=UTC
 )
 
 BASE_OPEN_TIME = datetime(
