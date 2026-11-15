@@ -42,7 +42,6 @@ def make_candles(
         open_time = START_TIME + timedelta(
             seconds=interval * index
         )
-
         close_time = open_time + timedelta(
             seconds=interval
         )
@@ -72,9 +71,9 @@ def analysis_time_for(data):
     )
 
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+# =========================================================
+# Configuration and parameters
+# =========================================================
 
 
 def test_supported_timeframes():
@@ -111,14 +110,7 @@ def test_validate_supported_timeframes(timeframe):
 
 @pytest.mark.parametrize(
     "timeframe",
-    [
-        "",
-        "1m",
-        "30m",
-        "1d",
-        None,
-        5,
-    ],
+    ["", "1m", "30m", "1d", None, 5],
 )
 def test_reject_unsupported_timeframes(timeframe):
     with pytest.raises(MarketStructureAnalyzerError):
@@ -138,6 +130,10 @@ def test_reject_unsupported_timeframes(timeframe):
         (3, 30, -0.001),
         (3, 30, True),
         (3, 30, "0.001"),
+        (3, 30, None),
+        (3, 30, float("nan")),
+        (3, 30, float("inf")),
+        (3, 30, float("-inf")),
     ],
 )
 def test_invalid_parameters_are_rejected(
@@ -153,6 +149,18 @@ def test_invalid_parameters_are_rejected(
         )
 
 
+@pytest.mark.parametrize(
+    "tolerance",
+    [0, 0.001, 0.01, 1, 2.5],
+)
+def test_valid_liquidity_tolerance_is_accepted(tolerance):
+    _validate_parameters(
+        swing_window=3,
+        minimum_candles=30,
+        liquidity_tolerance=tolerance,
+    )
+
+
 def test_valid_parameters_are_accepted():
     _validate_parameters(
         swing_window=3,
@@ -161,15 +169,13 @@ def test_valid_parameters_are_accepted():
     )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Constructor
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_analyzer_initialization():
-    analyzer = MarketStructureAnalyzer(
-        timeframe="5m"
-    )
+    analyzer = MarketStructureAnalyzer("5m")
 
     assert analyzer.timeframe == "5m"
     assert analyzer.swing_window == 3
@@ -192,16 +198,26 @@ def test_constructor_accepts_custom_parameters():
     assert analyzer.liquidity_tolerance == 0.002
 
 
-def test_constructor_rejects_invalid_timeframe():
+@pytest.mark.parametrize(
+    "tolerance",
+    [float("nan"), float("inf"), float("-inf")],
+)
+def test_constructor_rejects_non_finite_tolerance(tolerance):
     with pytest.raises(MarketStructureAnalyzerError):
         MarketStructureAnalyzer(
-            timeframe="1m"
+            timeframe="5m",
+            liquidity_tolerance=tolerance,
         )
 
 
-# ---------------------------------------------------------
+def test_constructor_rejects_invalid_timeframe():
+    with pytest.raises(MarketStructureAnalyzerError):
+        MarketStructureAnalyzer("1m")
+
+
+# =========================================================
 # Input validation
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_analyze_requires_dataframe():
@@ -226,7 +242,6 @@ def test_analyze_rejects_empty_dataframe():
 
 def test_analyze_rejects_missing_columns():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = pd.DataFrame(
         {
             "open": [100.0],
@@ -253,16 +268,13 @@ def test_analyze_rejects_naive_analysis_time():
 
 def test_analyze_rejects_non_utc_analysis_time():
     analyzer = MarketStructureAnalyzer("5m")
-
     non_utc = datetime(
         2026,
         11,
         14,
         12,
         0,
-        tzinfo=timezone(
-            timedelta(hours=2)
-        ),
+        tzinfo=timezone(timedelta(hours=2)),
     )
 
     with pytest.raises(MarketStructureAnalyzerError):
@@ -274,94 +286,74 @@ def test_analyze_rejects_non_utc_analysis_time():
 
 def test_analyze_rejects_naive_candle_timestamps():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     data["open_time"] = (
-        data["open_time"]
-        .dt.tz_localize(None)
+        data["open_time"].dt.tz_localize(None)
     )
 
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
             data,
-            analysis_time=analysis_time_for(
-                make_candles()
-            ),
+            analysis_time=analysis_time_for(make_candles()),
         )
 
 
 def test_analyze_rejects_non_utc_candle_timestamps():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     data["open_time"] = (
-        data["open_time"]
-        .dt.tz_convert("Europe/Berlin")
+        data["open_time"].dt.tz_convert("Europe/Berlin")
     )
 
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
             data,
-            analysis_time=analysis_time_for(
-                make_candles()
-            ),
+            analysis_time=analysis_time_for(make_candles()),
         )
 
 
 def test_analyze_rejects_candle_closing_before_opening():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     data.loc[5, "close_time"] = (
-        data.loc[5, "open_time"]
-        - timedelta(minutes=1)
+        data.loc[5, "open_time"] - timedelta(minutes=1)
     )
 
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
             data,
-            analysis_time=analysis_time_for(
-                make_candles()
-            ),
+            analysis_time=analysis_time_for(make_candles()),
         )
 
 
 def test_analyze_rejects_wrong_candle_duration():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
-    data.loc[5, "close_time"] += timedelta(
-        minutes=1
-    )
+    data.loc[5, "close_time"] += timedelta(minutes=1)
 
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
             data,
-            analysis_time=analysis_time_for(
-                make_candles()
-            ),
+            analysis_time=analysis_time_for(make_candles()),
         )
 
 
 def test_analyze_rejects_future_candles():
     analyzer = MarketStructureAnalyzer("5m")
 
-    data = make_candles()
-
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
-            data,
+            make_candles(),
             analysis_time=START_TIME,
         )
 
 
 def test_analyze_rejects_unsorted_candles():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     data = pd.concat(
@@ -376,45 +368,33 @@ def test_analyze_rejects_unsorted_candles():
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
             data,
-            analysis_time=analysis_time_for(
-                make_candles()
-            ),
+            analysis_time=analysis_time_for(make_candles()),
         )
 
 
 def test_analyze_rejects_duplicate_open_times():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
-    data.loc[10, "open_time"] = (
-        data.loc[9, "open_time"]
-    )
+    data.loc[10, "open_time"] = data.loc[9, "open_time"]
 
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
             data,
-            analysis_time=analysis_time_for(
-                make_candles()
-            ),
+            analysis_time=analysis_time_for(make_candles()),
         )
 
 
 def test_analyze_rejects_duplicate_close_times():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
-    data.loc[10, "close_time"] = (
-        data.loc[9, "close_time"]
-    )
+    data.loc[10, "close_time"] = data.loc[9, "close_time"]
 
     with pytest.raises(MarketStructureAnalyzerError):
         analyzer.analyze(
             data,
-            analysis_time=analysis_time_for(
-                make_candles()
-            ),
+            analysis_time=analysis_time_for(make_candles()),
         )
 
 
@@ -423,7 +403,6 @@ def test_analyze_rejects_insufficient_candles():
         timeframe="5m",
         minimum_candles=30,
     )
-
     data = make_candles(20)
 
     with pytest.raises(MarketStructureAnalyzerError):
@@ -433,22 +412,120 @@ def test_analyze_rejects_insufficient_candles():
         )
 
 
-# ---------------------------------------------------------
+# =========================================================
+# Numeric OHLCV validation
+# =========================================================
+
+
+@pytest.mark.parametrize(
+    "column,bad_value",
+    [
+        ("open", float("nan")),
+        ("open", float("inf")),
+        ("open", float("-inf")),
+        ("open", "invalid"),
+        ("open", None),
+        ("open", True),
+        ("high", float("nan")),
+        ("high", float("inf")),
+        ("high", "invalid"),
+        ("low", float("nan")),
+        ("low", float("-inf")),
+        ("low", "invalid"),
+        ("close", float("nan")),
+        ("close", float("inf")),
+        ("close", "invalid"),
+        ("volume", float("nan")),
+        ("volume", float("inf")),
+        ("volume", float("-inf")),
+        ("volume", "invalid"),
+        ("volume", None),
+        ("volume", True),
+    ],
+)
+def test_analyze_rejects_non_finite_or_non_numeric_ohlcv(
+    column,
+    bad_value,
+):
+    analyzer = MarketStructureAnalyzer("5m")
+    data = make_candles()
+
+    # Preserve bool values instead of allowing Pandas
+    # to coerce True into a numeric value such as 1.0.
+    if isinstance(bad_value, bool):
+        data[column] = data[column].astype(object)
+
+    data.loc[10, column] = bad_value
+
+    with pytest.raises(MarketStructureAnalyzerError):
+        analyzer.analyze(
+            data,
+            analysis_time=analysis_time_for(data),
+        )
+
+
+@pytest.mark.parametrize(
+    "column,bad_value",
+    [
+        ("open", 0),
+        ("open", -1),
+        ("high", 0),
+        ("low", -1),
+        ("close", 0),
+        ("close", -1),
+        ("volume", -1),
+    ],
+)
+def test_analyze_rejects_invalid_ohlcv_values(
+    column,
+    bad_value,
+):
+    analyzer = MarketStructureAnalyzer("5m")
+    data = make_candles()
+
+    data.loc[10, column] = bad_value
+
+    with pytest.raises(MarketStructureAnalyzerError):
+        analyzer.analyze(
+            data,
+            analysis_time=analysis_time_for(data),
+        )
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"open": 100, "high": 99, "low": 98, "close": 100},
+        {"open": 100, "high": 101, "low": 102, "close": 100},
+        {"open": 100, "high": 101, "low": 99, "close": 102},
+        {"open": 100, "high": 101, "low": 99, "close": 98},
+    ],
+)
+def test_analyze_rejects_inconsistent_ohlc(values):
+    analyzer = MarketStructureAnalyzer("5m")
+    data = make_candles()
+
+    for column, value in values.items():
+        data.loc[10, column] = value
+
+    with pytest.raises(MarketStructureAnalyzerError):
+        analyzer.analyze(
+            data,
+            analysis_time=analysis_time_for(data),
+        )
+
+
+# =========================================================
 # Timeframe validation
-# ---------------------------------------------------------
+# =========================================================
 
 
 @pytest.mark.parametrize(
     "timeframe",
     ["5m", "15m", "1h", "4h"],
 )
-def test_analyze_accepts_matching_timeframe_duration(
-    timeframe,
-):
-    analyzer = MarketStructureAnalyzer(
-        timeframe=timeframe
-    )
-
+def test_analyze_accepts_matching_timeframe_duration(timeframe):
+    analyzer = MarketStructureAnalyzer(timeframe)
     data = make_candles(
         count=40,
         timeframe=timeframe,
@@ -477,10 +554,7 @@ def test_analyze_rejects_mismatched_timeframe_duration(
     analyzer_timeframe,
     data_timeframe,
 ):
-    analyzer = MarketStructureAnalyzer(
-        timeframe=analyzer_timeframe
-    )
-
+    analyzer = MarketStructureAnalyzer(analyzer_timeframe)
     data = make_candles(
         count=40,
         timeframe=data_timeframe,
@@ -493,14 +567,13 @@ def test_analyze_rejects_mismatched_timeframe_duration(
         )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Successful analysis
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_analyze_returns_expected_schema():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     result = analyzer.analyze(
@@ -540,7 +613,6 @@ def test_analyze_returns_expected_schema():
 
 def test_analyze_uses_utc_timestamps():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     result = analyzer.analyze(
@@ -548,37 +620,23 @@ def test_analyze_uses_utc_timestamps():
         analysis_time=analysis_time_for(data),
     )
 
-    assert result["analysis_timestamp"].endswith(
-        "+00:00"
-    )
-
-    assert result["last_candle_close_time"].endswith(
-        "+00:00"
-    )
+    assert result["analysis_timestamp"].endswith("+00:00")
+    assert result["last_candle_close_time"].endswith("+00:00")
 
 
 def test_analyze_is_deterministic():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
     timestamp = analysis_time_for(data)
 
-    first = analyzer.analyze(
-        data,
-        analysis_time=timestamp,
-    )
-
-    second = analyzer.analyze(
-        data,
-        analysis_time=timestamp,
-    )
+    first = analyzer.analyze(data, analysis_time=timestamp)
+    second = analyzer.analyze(data, analysis_time=timestamp)
 
     assert first == second
 
 
 def test_flat_market_has_no_confirmed_swings():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     result = analyzer.analyze(
@@ -597,7 +655,6 @@ def test_flat_market_has_no_confirmed_swings():
 
 def test_analyze_does_not_modify_input():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
     original = data.copy(deep=True)
 
@@ -606,15 +663,11 @@ def test_analyze_does_not_modify_input():
         analysis_time=analysis_time_for(data),
     )
 
-    pd.testing.assert_frame_equal(
-        data,
-        original,
-    )
+    pd.testing.assert_frame_equal(data, original)
 
 
 def test_analyze_preserves_source_information():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     data.loc[20:, "source"] = "coingecko"
@@ -624,15 +677,12 @@ def test_analyze_preserves_source_information():
         analysis_time=analysis_time_for(data),
     )
 
-    assert result["source"] == [
-        "coingecko",
-        "kraken",
-    ]
+    assert result["source"] == ["coingecko", "kraken"]
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Liquidity zones
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_build_liquidity_zones_from_equal_highs():
@@ -643,9 +693,7 @@ def test_build_liquidity_zones_from_equal_highs():
                 "classification": "EQH",
                 "price": 100.0,
                 "time": "2026-11-14T01:00:00+00:00",
-                "confirmation_time": (
-                    "2026-11-14T01:10:00+00:00"
-                ),
+                "confirmation_time": "2026-11-14T01:10:00+00:00",
             }
         ]
     }
@@ -658,12 +706,8 @@ def test_build_liquidity_zones_from_equal_highs():
     assert len(zones) == 1
     assert zones[0]["type"] == "BUY_SIDE_LIQUIDITY"
     assert zones[0]["price"] == 100.0
-    assert zones[0]["lower_bound"] == pytest.approx(
-        99.9
-    )
-    assert zones[0]["upper_bound"] == pytest.approx(
-        100.1
-    )
+    assert zones[0]["lower_bound"] == pytest.approx(99.9)
+    assert zones[0]["upper_bound"] == pytest.approx(100.1)
 
 
 def test_build_liquidity_zones_from_equal_lows():
@@ -674,9 +718,7 @@ def test_build_liquidity_zones_from_equal_lows():
                 "classification": "EQL",
                 "price": 90.0,
                 "time": "2026-11-14T01:00:00+00:00",
-                "confirmation_time": (
-                    "2026-11-14T01:10:00+00:00"
-                ),
+                "confirmation_time": "2026-11-14T01:10:00+00:00",
             }
         ]
     }
@@ -698,28 +740,22 @@ def test_build_liquidity_zones_ignores_non_equal_swings():
                 "classification": "HH",
                 "price": 110.0,
                 "time": "2026-11-14T01:00:00+00:00",
-                "confirmation_time": (
-                    "2026-11-14T01:10:00+00:00"
-                ),
+                "confirmation_time": "2026-11-14T01:10:00+00:00",
             },
             {
                 "type": "LOW",
                 "classification": "HL",
                 "price": 95.0,
                 "time": "2026-11-14T02:00:00+00:00",
-                "confirmation_time": (
-                    "2026-11-14T02:10:00+00:00"
-                ),
+                "confirmation_time": "2026-11-14T02:10:00+00:00",
             },
         ]
     }
 
-    zones = _build_liquidity_zones(
+    assert _build_liquidity_zones(
         structure,
         tolerance=0.001,
-    )
-
-    assert zones == []
+    ) == []
 
 
 def test_build_liquidity_zones_handles_empty_swings():
@@ -729,14 +765,13 @@ def test_build_liquidity_zones_handles_empty_swings():
     ) == []
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Liquidity sweeps
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_detect_buy_side_liquidity_sweep():
     data = make_candles(5)
-
     data.loc[2, "high"] = 105.0
     data.loc[2, "close"] = 99.0
 
@@ -746,20 +781,13 @@ def test_detect_buy_side_liquidity_sweep():
                 "type": "HIGH",
                 "price": 100.0,
                 "confirmation_index": 1,
-                "time": data.loc[
-                    0, "close_time"
-                ].isoformat(),
-                "confirmation_time": data.loc[
-                    1, "close_time"
-                ].isoformat(),
+                "time": data.loc[0, "close_time"].isoformat(),
+                "confirmation_time": data.loc[1, "close_time"].isoformat(),
             }
         ]
     }
 
-    sweeps = _detect_liquidity_sweeps(
-        data,
-        structure,
-    )
+    sweeps = _detect_liquidity_sweeps(data, structure)
 
     assert len(sweeps) == 1
     assert sweeps[0]["type"] == "BUY_SIDE_SWEEP"
@@ -770,7 +798,6 @@ def test_detect_buy_side_liquidity_sweep():
 
 def test_detect_sell_side_liquidity_sweep():
     data = make_candles(5)
-
     data.loc[2, "low"] = 95.0
     data.loc[2, "close"] = 101.0
 
@@ -780,20 +807,13 @@ def test_detect_sell_side_liquidity_sweep():
                 "type": "LOW",
                 "price": 100.0,
                 "confirmation_index": 1,
-                "time": data.loc[
-                    0, "close_time"
-                ].isoformat(),
-                "confirmation_time": data.loc[
-                    1, "close_time"
-                ].isoformat(),
+                "time": data.loc[0, "close_time"].isoformat(),
+                "confirmation_time": data.loc[1, "close_time"].isoformat(),
             }
         ]
     }
 
-    sweeps = _detect_liquidity_sweeps(
-        data,
-        structure,
-    )
+    sweeps = _detect_liquidity_sweeps(data, structure)
 
     assert len(sweeps) == 1
     assert sweeps[0]["type"] == "SELL_SIDE_SWEEP"
@@ -802,7 +822,6 @@ def test_detect_sell_side_liquidity_sweep():
 
 def test_liquidity_sweep_requires_close_back_inside_level():
     data = make_candles(5)
-
     data.loc[2, "high"] = 105.0
     data.loc[2, "close"] = 102.0
 
@@ -812,22 +831,13 @@ def test_liquidity_sweep_requires_close_back_inside_level():
                 "type": "HIGH",
                 "price": 100.0,
                 "confirmation_index": 1,
-                "time": data.loc[
-                    0, "close_time"
-                ].isoformat(),
-                "confirmation_time": data.loc[
-                    1, "close_time"
-                ].isoformat(),
+                "time": data.loc[0, "close_time"].isoformat(),
+                "confirmation_time": data.loc[1, "close_time"].isoformat(),
             }
         ]
     }
 
-    sweeps = _detect_liquidity_sweeps(
-        data,
-        structure,
-    )
-
-    assert sweeps == []
+    assert _detect_liquidity_sweeps(data, structure) == []
 
 
 def test_liquidity_sweep_ignores_unconfirmed_swing():
@@ -840,19 +850,12 @@ def test_liquidity_sweep_ignores_unconfirmed_swing():
                 "price": 100.0,
                 "confirmation_index": 10,
                 "time": "2026-11-14T00:00:00+00:00",
-                "confirmation_time": (
-                    "2026-11-14T00:05:00+00:00"
-                ),
+                "confirmation_time": "2026-11-14T00:05:00+00:00",
             }
         ]
     }
 
-    sweeps = _detect_liquidity_sweeps(
-        data,
-        structure,
-    )
-
-    assert sweeps == []
+    assert _detect_liquidity_sweeps(data, structure) == []
 
 
 def test_liquidity_sweep_ignores_invalid_confirmation_index():
@@ -865,27 +868,18 @@ def test_liquidity_sweep_ignores_invalid_confirmation_index():
                 "price": 100.0,
                 "confirmation_index": True,
                 "time": "2026-11-14T00:00:00+00:00",
-                "confirmation_time": (
-                    "2026-11-14T00:05:00+00:00"
-                ),
+                "confirmation_time": "2026-11-14T00:05:00+00:00",
             }
         ]
     }
 
-    sweeps = _detect_liquidity_sweeps(
-        data,
-        structure,
-    )
-
-    assert sweeps == []
+    assert _detect_liquidity_sweeps(data, structure) == []
 
 
 def test_only_first_sweep_per_swing_is_recorded():
     data = make_candles(6)
-
     data.loc[2, "high"] = 105.0
     data.loc[2, "close"] = 99.0
-
     data.loc[4, "high"] = 106.0
     data.loc[4, "close"] = 98.0
 
@@ -895,27 +889,18 @@ def test_only_first_sweep_per_swing_is_recorded():
                 "type": "HIGH",
                 "price": 100.0,
                 "confirmation_index": 1,
-                "time": data.loc[
-                    0, "close_time"
-                ].isoformat(),
-                "confirmation_time": data.loc[
-                    1, "close_time"
-                ].isoformat(),
+                "time": data.loc[0, "close_time"].isoformat(),
+                "confirmation_time": data.loc[1, "close_time"].isoformat(),
             }
         ]
     }
 
-    sweeps = _detect_liquidity_sweeps(
-        data,
-        structure,
-    )
-
-    assert len(sweeps) == 1
+    assert len(_detect_liquidity_sweeps(data, structure)) == 1
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Fibonacci
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_calculate_bullish_fibonacci():
@@ -934,9 +919,7 @@ def test_calculate_bullish_fibonacci():
         ]
     }
 
-    result = _calculate_fibonacci(
-        structure
-    )
+    result = _calculate_fibonacci(structure)
 
     assert result is not None
     assert result["direction"] == "BULLISH"
@@ -964,9 +947,7 @@ def test_calculate_bearish_fibonacci():
         ]
     }
 
-    result = _calculate_fibonacci(
-        structure
-    )
+    result = _calculate_fibonacci(structure)
 
     assert result is not None
     assert result["direction"] == "BEARISH"
@@ -975,37 +956,24 @@ def test_calculate_bearish_fibonacci():
     assert result["levels"]["1.000"] == 200.0
 
 
-def test_fibonacci_returns_none_without_highs():
-    structure = {
-        "swings": [
+@pytest.mark.parametrize(
+    "swings",
+    [
+        [
             {
                 "type": "LOW",
                 "price": 100.0,
                 "time": "2026-11-14T01:00:00+00:00",
             }
-        ]
-    }
-
-    assert _calculate_fibonacci(structure) is None
-
-
-def test_fibonacci_returns_none_without_lows():
-    structure = {
-        "swings": [
+        ],
+        [
             {
                 "type": "HIGH",
                 "price": 200.0,
                 "time": "2026-11-14T01:00:00+00:00",
             }
-        ]
-    }
-
-    assert _calculate_fibonacci(structure) is None
-
-
-def test_fibonacci_returns_none_for_invalid_range():
-    structure = {
-        "swings": [
+        ],
+        [
             {
                 "type": "LOW",
                 "price": 200.0,
@@ -1016,10 +984,11 @@ def test_fibonacci_returns_none_for_invalid_range():
                 "price": 100.0,
                 "time": "2026-11-14T02:00:00+00:00",
             },
-        ]
-    }
-
-    assert _calculate_fibonacci(structure) is None
+        ],
+    ],
+)
+def test_fibonacci_returns_none_for_unusable_swings(swings):
+    assert _calculate_fibonacci({"swings": swings}) is None
 
 
 def test_fibonacci_levels_match_configured_ratios():
@@ -1038,9 +1007,7 @@ def test_fibonacci_levels_match_configured_ratios():
         ]
     }
 
-    result = _calculate_fibonacci(
-        structure
-    )
+    result = _calculate_fibonacci(structure)
 
     assert set(result["levels"]) == {
         f"{level:.3f}"
@@ -1048,9 +1015,9 @@ def test_fibonacci_levels_match_configured_ratios():
     }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Analysis identifiers
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_analysis_id_is_deterministic():
@@ -1060,7 +1027,6 @@ def test_analysis_id_is_deterministic():
         "2026-11-14T03:20:00+00:00",
         ["kraken"],
     )
-
     second = _build_analysis_id(
         "5m",
         "2026-11-14T04:00:00+00:00",
@@ -1078,7 +1044,6 @@ def test_analysis_id_changes_with_timeframe():
         "2026-11-14T03:20:00+00:00",
         ["kraken"],
     )
-
     second = _build_analysis_id(
         "15m",
         "2026-11-14T04:00:00+00:00",
@@ -1096,7 +1061,6 @@ def test_analysis_id_ignores_source_order():
         "2026-11-14T03:20:00+00:00",
         ["kraken", "coingecko"],
     )
-
     second = _build_analysis_id(
         "5m",
         "2026-11-14T04:00:00+00:00",
@@ -1107,14 +1071,13 @@ def test_analysis_id_ignores_source_order():
     assert first == second
 
 
-# ---------------------------------------------------------
+# =========================================================
 # History management
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_analysis_is_added_to_history():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     result = analyzer.analyze(
@@ -1123,26 +1086,16 @@ def test_analysis_is_added_to_history():
     )
 
     assert len(analyzer.history) == 1
-    assert analyzer.history[0]["analysis_id"] == (
-        result["analysis_id"]
-    )
+    assert analyzer.history[0]["analysis_id"] == result["analysis_id"]
 
 
 def test_duplicate_analysis_is_not_added_twice():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
     timestamp = analysis_time_for(data)
 
-    first = analyzer.analyze(
-        data,
-        analysis_time=timestamp,
-    )
-
-    second = analyzer.analyze(
-        data,
-        analysis_time=timestamp,
-    )
+    first = analyzer.analyze(data, analysis_time=timestamp)
+    second = analyzer.analyze(data, analysis_time=timestamp)
 
     assert first == second
     assert len(analyzer.history) == 1
@@ -1150,15 +1103,10 @@ def test_duplicate_analysis_is_not_added_twice():
 
 def test_different_analysis_timestamp_creates_new_history_entry():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
     timestamp = analysis_time_for(data)
 
-    analyzer.analyze(
-        data,
-        analysis_time=timestamp,
-    )
-
+    analyzer.analyze(data, analysis_time=timestamp)
     analyzer.analyze(
         data,
         analysis_time=timestamp + timedelta(minutes=1),
@@ -1169,7 +1117,6 @@ def test_different_analysis_timestamp_creates_new_history_entry():
 
 def test_history_returns_defensive_copy():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     analyzer.analyze(
@@ -1178,7 +1125,6 @@ def test_history_returns_defensive_copy():
     )
 
     history = analyzer.history
-
     history[0]["trend"] = "MODIFIED"
     history[0]["summary"]["modified"] = True
 
@@ -1190,7 +1136,6 @@ def test_history_returns_defensive_copy():
 
 def test_clear_removes_history():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     analyzer.analyze(
@@ -1208,28 +1153,19 @@ def test_clear_removes_history():
 
 def test_analysis_can_be_added_after_clear():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
     timestamp = analysis_time_for(data)
 
-    analyzer.analyze(
-        data,
-        analysis_time=timestamp,
-    )
-
+    analyzer.analyze(data, analysis_time=timestamp)
     analyzer.clear()
-
-    analyzer.analyze(
-        data,
-        analysis_time=timestamp,
-    )
+    analyzer.analyze(data, analysis_time=timestamp)
 
     assert len(analyzer.history) == 1
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Convenience function
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_convenience_function_returns_success():
@@ -1273,14 +1209,13 @@ def test_convenience_function_rejects_invalid_timeframe():
         )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Output limitations
-# ---------------------------------------------------------
+# =========================================================
 
 
 def test_analysis_documents_safety_limitations():
     analyzer = MarketStructureAnalyzer("5m")
-
     data = make_candles()
 
     result = analyzer.analyze(
@@ -1294,12 +1229,10 @@ def test_analysis_documents_safety_limitations():
         "closed candles" in item.lower()
         for item in limitations
     )
-
     assert any(
         "trading orders" in item.lower()
         for item in limitations
     )
-
     assert any(
         "execute trades" in item.lower()
         for item in limitations
