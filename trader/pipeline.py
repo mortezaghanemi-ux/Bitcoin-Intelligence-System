@@ -52,6 +52,13 @@ class TradingPipeline:
         "4h": 240,
     }
 
+    REQUIRED_EXECUTION_SETTINGS = {
+        "manual_review_only": True,
+        "auto_trading": False,
+        "exchange_connection": False,
+        "exchange_api_keys_required": False,
+    }
+
     def __init__(
         self,
         *,
@@ -71,6 +78,7 @@ class TradingPipeline:
                     else self._default_config_dir()
                 )
             )
+
         except Exception as exc:
             raise TradingPipelineError(
                 f"Unable to load project configuration: {exc}"
@@ -86,17 +94,20 @@ class TradingPipeline:
                 "Trading pipeline is disabled in configuration."
             )
 
-        execution = trader_config.get("execution", {})
+        execution = trader_config.get(
+            "execution",
+            {},
+        )
 
-        if (
-            execution.get("manual_review_only") is not True
-            or execution.get("auto_trading") is not False
-            or execution.get("exchange_connection") is not False
-            or execution.get("exchange_api_keys_required") is not False
+        for setting, expected in (
+            self.REQUIRED_EXECUTION_SETTINGS.items()
         ):
-            raise TradingPipelineError(
-                "Unsafe trading execution configuration detected."
-            )
+
+            if execution.get(setting) is not expected:
+                raise TradingPipelineError(
+                    "Unsafe trading execution configuration detected: "
+                    f"{setting} must be {expected}."
+                )
 
         self.trader_config = trader_config
 
@@ -158,7 +169,10 @@ class TradingPipeline:
         confidence = self.trader_config.get(
             "signals",
             {},
-        ).get("confidence", {})
+        ).get(
+            "confidence",
+            {},
+        )
 
         return TradingSignalEngine(
             minimum_candles=30,
@@ -174,11 +188,42 @@ class TradingPipeline:
         )
 
     def _validate_stores(self) -> None:
-        """Ensure existing persistent records can be read safely."""
+        """Verify that existing persistent records are readable and unique."""
 
         try:
             self.history_store.read_all()
             self.rejection_store.read_all()
+
+            history_integrity = (
+                self.history_store.verify_integrity()
+            )
+
+            rejection_integrity = (
+                self.rejection_store.verify_integrity()
+            )
+
+            if not isinstance(history_integrity, dict):
+                raise TradingPipelineError(
+                    "Invalid signal history integrity report."
+                )
+
+            if not isinstance(rejection_integrity, dict):
+                raise TradingPipelineError(
+                    "Invalid rejection history integrity report."
+                )
+
+            if history_integrity.get("valid") is not True:
+                raise TradingPipelineError(
+                    "Signal history contains duplicate or invalid records."
+                )
+
+            if rejection_integrity.get("valid") is not True:
+                raise TradingPipelineError(
+                    "Rejection history contains duplicate or invalid records."
+                )
+
+        except TradingPipelineError:
+            raise
 
         except (
             SignalHistoryError,
@@ -193,6 +238,7 @@ class TradingPipeline:
     def _normalize_analysis_time(
         analysis_time: datetime | None,
     ) -> datetime:
+        """Validate and normalize the analysis timestamp."""
 
         if analysis_time is None:
             return datetime.now(timezone.utc)
@@ -241,7 +287,10 @@ class TradingPipeline:
 
         for timeframe in self.timeframes:
 
-            if not isinstance(data[timeframe], pd.DataFrame):
+            if not isinstance(
+                data[timeframe],
+                pd.DataFrame,
+            ):
                 raise TradingPipelineError(
                     f"{timeframe} data must be a DataFrame."
                 )
@@ -250,6 +299,74 @@ class TradingPipeline:
                 raise TradingPipelineError(
                     f"{timeframe} candle data is empty."
                 )
+
+    @staticmethod
+    def _select_single_source(
+        candles: pd.DataFrame,
+        timeframe: str,
+    ) -> pd.DataFrame:
+        """Select one deterministic source without mixing candle histories."""
+
+        if candles.empty:
+            raise TradingPipelineError(
+                f"No accepted candles available for {timeframe}."
+            )
+
+        if "source" not in candles.columns:
+            raise TradingPipelineError(
+                f"{timeframe} candle data has no source column."
+            )
+
+        sources = candles["source"].dropna().astype(str)
+
+        sources = sources.loc[
+            sources.str.strip() != ""
+        ]
+
+        if sources.empty:
+            raise TradingPipelineError(
+                f"{timeframe} has no valid candle source."
+            )
+
+        source_counts = sources.value_counts()
+
+        maximum_count = source_counts.max()
+
+        candidates = sorted(
+            source_counts.loc[
+                source_counts == maximum_count
+            ].index.tolist()
+        )
+
+        selected_source = candidates[0]
+
+        selected = candles.loc[
+            candles["source"].astype(str) == selected_source
+        ].copy(deep=True)
+
+        selected = selected.sort_values(
+            "open_time",
+            kind="stable",
+        ).reset_index(drop=True)
+
+        if selected.empty:
+            raise TradingPipelineError(
+                f"Unable to select a valid source for {timeframe}."
+            )
+
+        if selected["open_time"].duplicated().any():
+            raise TradingPipelineError(
+                f"{timeframe} contains duplicate candle timestamps "
+                f"for source {selected_source}."
+            )
+
+        if selected["close_time"].duplicated().any():
+            raise TradingPipelineError(
+                f"{timeframe} contains duplicate candle close times "
+                f"for source {selected_source}."
+            )
+
+        return selected
 
     def _validate_freshness(
         self,
@@ -264,21 +381,38 @@ class TradingPipeline:
                 f"No accepted candles available for {timeframe}."
             )
 
-        latest_close = pd.Timestamp(
-            candles["close_time"].iloc[-1]
-        )
+        try:
+            close_times = pd.to_datetime(
+                candles["close_time"],
+                errors="raise",
+                utc=True,
+            )
+
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+        ) as exc:
+            raise TradingPipelineError(
+                f"{timeframe} contains invalid close timestamps."
+            ) from exc
+
+        if close_times.isna().any():
+            raise TradingPipelineError(
+                f"{timeframe} contains missing close timestamps."
+            )
+
+        latest_close = close_times.max().to_pydatetime()
 
         if latest_close.tzinfo is None:
             raise TradingPipelineError(
                 f"{timeframe} latest candle has no timezone."
             )
 
-        if str(latest_close.tz) != "UTC":
+        if latest_close.utcoffset() != timedelta(0):
             raise TradingPipelineError(
                 f"{timeframe} latest candle is not UTC."
             )
-
-        latest_close = latest_close.to_pydatetime()
 
         age = analysis_time - latest_close
 
@@ -311,6 +445,15 @@ class TradingPipeline:
             limits.get("candles", 15)
         )
 
+        if (
+            pd.isna(configured_grace)
+            or configured_grace < 0
+            or not pd.notna(configured_grace)
+        ):
+            raise TradingPipelineError(
+                "Invalid candle freshness configuration."
+            )
+
         timeframe_minutes = self.TIMEFRAME_MINUTES[
             timeframe
         ]
@@ -331,7 +474,7 @@ class TradingPipeline:
         data: dict[str, pd.DataFrame],
         analysis_time: datetime,
     ) -> dict[str, pd.DataFrame]:
-        """Validate and prepare candles using CandleManager."""
+        """Validate, isolate and prepare candles for signal generation."""
 
         prepared: dict[str, pd.DataFrame] = {}
 
@@ -378,6 +521,11 @@ class TradingPipeline:
                 raise TradingPipelineError(
                     f"{timeframe} has no accepted candles."
                 )
+
+            accepted = self._select_single_source(
+                accepted,
+                timeframe,
+            )
 
             self._validate_freshness(
                 timeframe,
@@ -499,6 +647,46 @@ class TradingPipeline:
             "signal": history_record,
         }
 
+    @staticmethod
+    def _validate_signal_safety(
+        signal: dict[str, Any],
+    ) -> None:
+        """Verify signal metadata before any persistence operation."""
+
+        data_quality = signal.get("data_quality")
+
+        if not isinstance(data_quality, dict):
+            raise TradingPipelineError(
+                "Signal engine returned invalid data-quality metadata."
+            )
+
+        if data_quality.get("future_data_used") is not False:
+            raise TradingPipelineError(
+                "Signal engine did not confirm future-data protection."
+            )
+
+        if data_quality.get("closed_candles_only") is not True:
+            raise TradingPipelineError(
+                "Signal engine did not confirm closed-candle usage."
+            )
+
+        execution = signal.get("execution")
+
+        if not isinstance(execution, dict):
+            raise TradingPipelineError(
+                "Signal execution metadata is missing."
+            )
+
+        if (
+            execution.get("manual_review_only") is not True
+            or execution.get("auto_trading") is not False
+            or execution.get("exchange_connection") is not False
+            or execution.get("order_execution") is not False
+        ):
+            raise TradingPipelineError(
+                "Signal execution safety verification failed."
+            )
+
     def run(
         self,
         data: dict[str, pd.DataFrame],
@@ -538,39 +726,7 @@ class TradingPipeline:
                 "Signal engine returned an invalid result."
             )
 
-        data_quality = signal.get("data_quality")
-
-        if not isinstance(data_quality, dict):
-            raise TradingPipelineError(
-                "Signal engine returned invalid data-quality metadata."
-            )
-
-        if data_quality.get("future_data_used") is not False:
-            raise TradingPipelineError(
-                "Signal engine did not confirm future-data protection."
-            )
-
-        if data_quality.get("closed_candles_only") is not True:
-            raise TradingPipelineError(
-                "Signal engine did not confirm closed-candle usage."
-            )
-
-        execution = signal.get("execution")
-
-        if not isinstance(execution, dict):
-            raise TradingPipelineError(
-                "Signal execution metadata is missing."
-            )
-
-        if (
-            execution.get("manual_review_only") is not True
-            or execution.get("auto_trading") is not False
-            or execution.get("exchange_connection") is not False
-            or execution.get("order_execution") is not False
-        ):
-            raise TradingPipelineError(
-                "Signal execution safety verification failed."
-            )
+        self._validate_signal_safety(signal)
 
         persistence = self._persist_signal(
             signal
