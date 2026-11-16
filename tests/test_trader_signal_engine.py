@@ -742,7 +742,16 @@ def test_conflicting_nearest_order_blocks_return_neutral():
 def test_pattern_direction_bullish():
     results = {
         "5m": pd.DataFrame({
-            "direction": ["BULLISH", "BULLISH", "BEARISH"]
+            "direction": [
+                "BEARISH",
+                "BULLISH",
+                "BULLISH",
+            ],
+            "close_time": [
+                CHECK_TIME - timedelta(minutes=15),
+                CHECK_TIME - timedelta(minutes=10),
+                CHECK_TIME - timedelta(minutes=5),
+            ],
         })
     }
 
@@ -752,7 +761,16 @@ def test_pattern_direction_bullish():
 def test_pattern_direction_bearish():
     results = {
         "5m": pd.DataFrame({
-            "direction": ["BEARISH", "BEARISH", "BULLISH"]
+            "direction": [
+                "BULLISH",
+                "BEARISH",
+                "BEARISH",
+            ],
+            "close_time": [
+                CHECK_TIME - timedelta(minutes=15),
+                CHECK_TIME - timedelta(minutes=10),
+                CHECK_TIME - timedelta(minutes=5),
+            ],
         })
     }
 
@@ -762,7 +780,14 @@ def test_pattern_direction_bearish():
 def test_equal_patterns_return_neutral():
     results = {
         "5m": pd.DataFrame({
-            "direction": ["BULLISH", "BEARISH"]
+            "direction": [
+                "BULLISH",
+                "BEARISH",
+            ],
+            "close_time": [
+                CHECK_TIME - timedelta(minutes=5),
+                CHECK_TIME - timedelta(minutes=5),
+            ],
         })
     }
 
@@ -771,7 +796,12 @@ def test_equal_patterns_return_neutral():
 
 def test_empty_patterns_return_neutral():
     results = {
-        "5m": pd.DataFrame(columns=["direction"])
+        "5m": pd.DataFrame(
+            columns=[
+                "direction",
+                "close_time",
+            ]
+        )
     }
 
     assert _select_pattern_direction(results) == "NEUTRAL"
