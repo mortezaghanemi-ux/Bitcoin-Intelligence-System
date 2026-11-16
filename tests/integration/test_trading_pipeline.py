@@ -363,7 +363,7 @@ def test_pipeline_rejects_future_candles(
 
     with pytest.raises(
         TradingPipelineError,
-        match="Candle validation failed",
+        match="candle validation failed",
     ):
         pipeline.run(
             market_data,
