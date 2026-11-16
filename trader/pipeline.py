@@ -191,7 +191,6 @@ class TradingPipeline:
         """Verify persistent stores and check integrity when supported."""
 
         try:
-            # Every store must be readable.
             self.history_store.read_all()
             self.rejection_store.read_all()
 
@@ -207,7 +206,6 @@ class TradingPipeline:
                 None,
             )
 
-            # Integrity verification is mandatory for real project stores.
             if (
                 isinstance(self.history_store, SignalHistoryStore)
                 and not callable(history_check)
@@ -224,7 +222,6 @@ class TradingPipeline:
                     "Rejection history integrity verification is unavailable."
                 )
 
-            # Verify history integrity when supported.
             if callable(history_check):
                 history_integrity = history_check()
 
@@ -238,7 +235,6 @@ class TradingPipeline:
                         "Signal history contains duplicate or invalid records."
                     )
 
-            # Verify rejection integrity when supported.
             if callable(rejection_check):
                 rejection_integrity = rejection_check()
 
@@ -289,6 +285,65 @@ class TradingPipeline:
             )
 
         return analysis_time.astimezone(timezone.utc)
+
+    @staticmethod
+    def _parse_utc_timestamps(
+        values: pd.Series,
+        *,
+        timeframe: str,
+        column: str,
+    ) -> pd.Series:
+        """Parse timestamps without silently accepting naive values."""
+
+        if not isinstance(values, pd.Series):
+            raise TradingPipelineError(
+                f"{timeframe} {column} must be a pandas Series."
+            )
+
+        parsed_values = []
+
+        for index, value in values.items():
+
+            try:
+                timestamp = pd.Timestamp(value)
+
+            except (
+                TypeError,
+                ValueError,
+                OverflowError,
+            ) as exc:
+                raise TradingPipelineError(
+                    f"{timeframe} contains an invalid {column} "
+                    f"at index {index}."
+                ) from exc
+
+            if pd.isna(timestamp):
+                raise TradingPipelineError(
+                    f"{timeframe} contains a missing {column} "
+                    f"at index {index}."
+                )
+
+            if timestamp.tzinfo is None:
+                raise TradingPipelineError(
+                    f"{timeframe} contains a timezone-naive {column} "
+                    f"at index {index}."
+                )
+
+            if timestamp.utcoffset() != timedelta(0):
+                raise TradingPipelineError(
+                    f"{timeframe} contains a non-UTC {column} "
+                    f"at index {index}."
+                )
+
+            parsed_values.append(
+                timestamp.tz_convert("UTC")
+            )
+
+        return pd.Series(
+            pd.DatetimeIndex(parsed_values),
+            index=values.index,
+            name=column,
+        )
 
     def _validate_input(
         self,
@@ -404,45 +459,45 @@ class TradingPipeline:
         candles: pd.DataFrame,
         analysis_time: datetime,
     ) -> None:
-        """Reject a timeframe whose latest closed candle is stale."""
+        """Reject stale data using the latest candle by open time."""
 
         if candles.empty:
             raise TradingPipelineError(
                 f"No accepted candles available for {timeframe}."
             )
 
-        try:
-            close_times = pd.to_datetime(
-                candles["close_time"],
-                errors="raise",
-                utc=True,
+        if "open_time" not in candles.columns:
+            raise TradingPipelineError(
+                f"{timeframe} candle data has no open_time column."
             )
 
-        except (
-            TypeError,
-            ValueError,
-            OverflowError,
-        ) as exc:
+        if "close_time" not in candles.columns:
             raise TradingPipelineError(
-                f"{timeframe} contains invalid close timestamps."
-            ) from exc
-
-        if close_times.isna().any():
-            raise TradingPipelineError(
-                f"{timeframe} contains missing close timestamps."
+                f"{timeframe} candle data has no close_time column."
             )
 
-        latest_close = close_times.max().to_pydatetime()
+        open_times = self._parse_utc_timestamps(
+            candles["open_time"],
+            timeframe=timeframe,
+            column="open_time",
+        )
 
-        if latest_close.tzinfo is None:
+        close_times = self._parse_utc_timestamps(
+            candles["close_time"],
+            timeframe=timeframe,
+            column="close_time",
+        )
+
+        if (close_times < open_times).any():
             raise TradingPipelineError(
-                f"{timeframe} latest candle has no timezone."
+                f"{timeframe} contains a candle closing before it opens."
             )
 
-        if latest_close.utcoffset() != timedelta(0):
-            raise TradingPipelineError(
-                f"{timeframe} latest candle is not UTC."
-            )
+        latest_index = open_times.idxmax()
+
+        latest_close = close_times.loc[
+            latest_index
+        ].to_pydatetime()
 
         age = analysis_time - latest_close
 
@@ -471,14 +526,24 @@ class TradingPipeline:
             {},
         )
 
-        configured_grace = float(
-            limits.get("candles", 15)
-        )
+        try:
+            configured_grace = float(
+                limits.get("candles", 15)
+            )
+
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+        ) as exc:
+            raise TradingPipelineError(
+                "Invalid candle freshness configuration."
+            ) from exc
 
         if (
             pd.isna(configured_grace)
-            or configured_grace < 0
             or not pd.notna(configured_grace)
+            or configured_grace < 0
         ):
             raise TradingPipelineError(
                 "Invalid candle freshness configuration."
