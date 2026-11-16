@@ -226,7 +226,7 @@ class TradingPipeline:
             )
 
             unknown = sorted(
-                set(data) - set(self.timeframes)
+                set(self.timeframes) ^ set(data)
             )
 
             raise TradingPipelineError(
@@ -310,9 +310,6 @@ class TradingPipeline:
             timeframe
         ]
 
-        # A higher timeframe naturally closes less frequently.
-        # Its allowed age therefore includes one full interval
-        # plus the configured freshness grace period.
         maximum_age = timedelta(
             minutes=timeframe_minutes + configured_grace
         )
@@ -384,11 +381,63 @@ class TradingPipeline:
 
         return prepared
 
+    @staticmethod
+    def _requires_rejection_persistence(
+        signal: dict[str, Any],
+    ) -> bool:
+        """Return whether a signal belongs in rejection history."""
+
+        return (
+            signal.get("status") == "REJECTED"
+            and signal.get("signal") == "NO_TRADE"
+        )
+
+    def _ensure_rejection_persisted(
+        self,
+        signal: dict[str, Any],
+    ) -> bool:
+        """Ensure a rejected signal exists in rejection storage."""
+
+        if not self._requires_rejection_persistence(signal):
+            return False
+
+        signal_id = signal["signal_id"]
+
+        try:
+            existing_rejection = self.rejection_store.get(
+                signal_id
+            )
+
+            if existing_rejection is not None:
+                return True
+
+            self.rejection_store.append(signal)
+
+            # Verify persistence rather than trusting append alone.
+            if not self.rejection_store.contains(signal_id):
+                raise TradingPipelinePersistenceError(
+                    "Rejection record was not found after append."
+                )
+
+            return True
+
+        except TradingPipelinePersistenceError:
+            raise
+
+        except (
+            SignalRejectionError,
+            OSError,
+        ) as exc:
+            raise TradingPipelinePersistenceError(
+                "Unable to persist rejection record "
+                f"for {signal_id}: {exc}"
+            ) from exc
+
     def _persist_signal(
         self,
         signal: dict[str, Any],
     ) -> dict[str, Any]:
-        """Persist every signal and separately persist rejections."""
+        """Persist signal history and ensure rejection consistency."""
 
         signal_id = signal.get("signal_id")
 
@@ -401,20 +450,28 @@ class TradingPipeline:
             existing = self.history_store.get(signal_id)
 
             if existing is not None:
+                rejection_saved = self._ensure_rejection_persisted(
+                    existing
+                )
+
                 return {
                     "status": "DUPLICATE",
                     "history_saved": True,
                     "rejection_saved": (
-                        signal.get("signal") != "NO_TRADE"
-                        or self.rejection_store.contains(signal_id)
+                        rejection_saved
+                        or not self._requires_rejection_persistence(
+                            existing
+                        )
                     ),
                     "signal": existing,
                 }
 
-            # All generated signals are stored in the main history.
             history_record = self.history_store.append(
                 signal
             )
+
+        except TradingPipelinePersistenceError:
+            raise
 
         except (
             SignalHistoryError,
@@ -424,30 +481,23 @@ class TradingPipeline:
                 f"Unable to persist signal history: {exc}"
             ) from exc
 
-        rejection_saved = False
+        # Use the stored record returned by the history store.
+        # This also handles a duplicate discovered during append.
+        rejection_saved = self._ensure_rejection_persisted(
+            history_record
+        )
 
-        if (
-            signal.get("status") == "REJECTED"
-            and signal.get("signal") == "NO_TRADE"
+        if not self._requires_rejection_persistence(
+            history_record
         ):
-            try:
-                self.rejection_store.append(
-                    signal
-                )
-
-                rejection_saved = True
-
-            except (
-                SignalRejectionError,
-                OSError,
-            ) as exc:
-                raise TradingPipelinePersistenceError(
-                    "Signal history was saved, but rejection "
-                    f"persistence failed for {signal_id}: {exc}"
-                ) from exc
+            rejection_saved = False
 
         return {
-            "status": "SAVED",
+            "status": (
+                "DUPLICATE"
+                if history_record.get("duplicate") is True
+                else "SAVED"
+            ),
             "history_saved": True,
             "rejection_saved": rejection_saved,
             "signal": history_record,
