@@ -188,39 +188,69 @@ class TradingPipeline:
         )
 
     def _validate_stores(self) -> None:
-        """Verify that existing persistent records are readable and unique."""
+        """Verify persistent stores and check integrity when supported."""
 
         try:
+            # Every store must be readable.
             self.history_store.read_all()
             self.rejection_store.read_all()
 
-            history_integrity = (
-                self.history_store.verify_integrity()
+            history_check = getattr(
+                self.history_store,
+                "verify_integrity",
+                None,
             )
 
-            rejection_integrity = (
-                self.rejection_store.verify_integrity()
+            rejection_check = getattr(
+                self.rejection_store,
+                "verify_integrity",
+                None,
             )
 
-            if not isinstance(history_integrity, dict):
+            # Integrity verification is mandatory for real project stores.
+            if (
+                isinstance(self.history_store, SignalHistoryStore)
+                and not callable(history_check)
+            ):
                 raise TradingPipelineError(
-                    "Invalid signal history integrity report."
+                    "Signal history integrity verification is unavailable."
                 )
 
-            if not isinstance(rejection_integrity, dict):
+            if (
+                isinstance(self.rejection_store, SignalRejectionStore)
+                and not callable(rejection_check)
+            ):
                 raise TradingPipelineError(
-                    "Invalid rejection history integrity report."
+                    "Rejection history integrity verification is unavailable."
                 )
 
-            if history_integrity.get("valid") is not True:
-                raise TradingPipelineError(
-                    "Signal history contains duplicate or invalid records."
-                )
+            # Verify history integrity when supported.
+            if callable(history_check):
+                history_integrity = history_check()
 
-            if rejection_integrity.get("valid") is not True:
-                raise TradingPipelineError(
-                    "Rejection history contains duplicate or invalid records."
-                )
+                if not isinstance(history_integrity, dict):
+                    raise TradingPipelineError(
+                        "Invalid signal history integrity report."
+                    )
+
+                if history_integrity.get("valid") is not True:
+                    raise TradingPipelineError(
+                        "Signal history contains duplicate or invalid records."
+                    )
+
+            # Verify rejection integrity when supported.
+            if callable(rejection_check):
+                rejection_integrity = rejection_check()
+
+                if not isinstance(rejection_integrity, dict):
+                    raise TradingPipelineError(
+                        "Invalid rejection history integrity report."
+                    )
+
+                if rejection_integrity.get("valid") is not True:
+                    raise TradingPipelineError(
+                        "Rejection history contains duplicate or invalid records."
+                    )
 
         except TradingPipelineError:
             raise
