@@ -79,7 +79,6 @@ def make_candles(timeframe="5m", count=40):
     rows = []
 
     for index in range(count):
-
         opened = start + timedelta(
             minutes=minutes * index
         )
@@ -152,8 +151,17 @@ class FakeHistoryStore:
         return self.records.get(signal_id)
 
     def append(self, signal):
-        self.records[signal["signal_id"]] = dict(signal)
-        return dict(signal)
+        signal_id = signal["signal_id"]
+
+        if signal_id in self.records:
+            existing = dict(self.records[signal_id])
+            existing["duplicate"] = True
+            return existing
+
+        record = dict(signal)
+        self.records[signal_id] = record
+
+        return dict(record)
 
 
 class FakeRejectionStore:
@@ -171,8 +179,17 @@ class FakeRejectionStore:
         return signal_id in self.records
 
     def append(self, signal):
-        self.records[signal["signal_id"]] = dict(signal)
-        return dict(signal)
+        signal_id = signal["signal_id"]
+
+        if signal_id in self.records:
+            existing = dict(self.records[signal_id])
+            existing["duplicate"] = True
+            return existing
+
+        record = dict(signal)
+        self.records[signal_id] = record
+
+        return dict(record)
 
 
 class FakeEngine:
@@ -732,6 +749,12 @@ def test_history_persistence_failure_is_reported(pipeline):
 def test_rejection_persistence_failure_is_reported(pipeline):
     class FailingRejections:
 
+        def get(self, signal_id):
+            return None
+
+        def contains(self, signal_id):
+            return False
+
         def append(self, signal):
             raise OSError("disk unavailable")
 
@@ -744,6 +767,47 @@ def test_rejection_persistence_failure_is_reported(pipeline):
 
     with pytest.raises(TradingPipelinePersistenceError):
         pipeline._persist_signal(signal)
+
+
+def test_rejection_persistence_is_repaired_on_retry(
+    pipeline,
+    stores,
+):
+    history, rejections = stores
+
+    signal = make_signal(
+        signal="NO_TRADE",
+        status="REJECTED",
+    )
+
+    class FailOnceRejections(FakeRejectionStore):
+
+        def __init__(self):
+            super().__init__()
+            self.fail_once = True
+
+        def append(self, signal):
+            if self.fail_once:
+                self.fail_once = False
+                raise OSError("temporary disk failure")
+
+            return super().append(signal)
+
+    retry_store = FailOnceRejections()
+    pipeline.rejection_store = retry_store
+
+    with pytest.raises(TradingPipelinePersistenceError):
+        pipeline._persist_signal(signal)
+
+    assert signal["signal_id"] in history.records
+    assert not retry_store.contains(signal["signal_id"])
+
+    result = pipeline._persist_signal(signal)
+
+    assert result["status"] == "DUPLICATE"
+    assert result["history_saved"] is True
+    assert result["rejection_saved"] is True
+    assert retry_store.contains(signal["signal_id"])
 
 
 # ---------------------------------------------------------
