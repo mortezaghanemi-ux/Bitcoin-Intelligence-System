@@ -65,9 +65,11 @@ class TradingPipeline:
 
         try:
             self.config = load_config(
-                config_dir=config_dir
-                if config_dir is not None
-                else self._default_config_dir()
+                config_dir=(
+                    config_dir
+                    if config_dir is not None
+                    else self._default_config_dir()
+                )
             )
         except Exception as exc:
             raise TradingPipelineError(
@@ -102,7 +104,10 @@ class TradingPipeline:
             trader_config.get("timeframes", [])
         )
 
-        if set(self.timeframes) != set(SUPPORTED_TIMEFRAMES):
+        if (
+            len(self.timeframes) != len(set(self.timeframes))
+            or set(self.timeframes) != set(SUPPORTED_TIMEFRAMES)
+        ):
             raise TradingPipelineError(
                 "Configured trader timeframes do not match "
                 "the supported engine timeframes."
@@ -226,7 +231,7 @@ class TradingPipeline:
             )
 
             unknown = sorted(
-                set(self.timeframes) ^ set(data)
+                set(data) - set(self.timeframes)
             )
 
             raise TradingPipelineError(
@@ -359,7 +364,10 @@ class TradingPipeline:
 
             rejected = result.get("rejected")
 
-            if isinstance(rejected, pd.DataFrame) and not rejected.empty:
+            if (
+                isinstance(rejected, pd.DataFrame)
+                and not rejected.empty
+            ):
                 raise TradingPipelineError(
                     f"{timeframe} contains rejected candles."
                 )
@@ -413,7 +421,6 @@ class TradingPipeline:
 
             self.rejection_store.append(signal)
 
-            # Verify persistence rather than trusting append alone.
             if not self.rejection_store.contains(signal_id):
                 raise TradingPipelinePersistenceError(
                     "Rejection record was not found after append."
@@ -450,6 +457,7 @@ class TradingPipeline:
             existing = self.history_store.get(signal_id)
 
             if existing is not None:
+
                 rejection_saved = self._ensure_rejection_persisted(
                     existing
                 )
@@ -457,12 +465,7 @@ class TradingPipeline:
                 return {
                     "status": "DUPLICATE",
                     "history_saved": True,
-                    "rejection_saved": (
-                        rejection_saved
-                        or not self._requires_rejection_persistence(
-                            existing
-                        )
-                    ),
+                    "rejection_saved": rejection_saved,
                     "signal": existing,
                 }
 
@@ -481,16 +484,9 @@ class TradingPipeline:
                 f"Unable to persist signal history: {exc}"
             ) from exc
 
-        # Use the stored record returned by the history store.
-        # This also handles a duplicate discovered during append.
         rejection_saved = self._ensure_rejection_persisted(
             history_record
         )
-
-        if not self._requires_rejection_persistence(
-            history_record
-        ):
-            rejection_saved = False
 
         return {
             "status": (
@@ -542,21 +538,29 @@ class TradingPipeline:
                 "Signal engine returned an invalid result."
             )
 
-        if signal.get("data_quality", {}).get(
-            "future_data_used"
-        ) is not False:
+        data_quality = signal.get("data_quality")
+
+        if not isinstance(data_quality, dict):
+            raise TradingPipelineError(
+                "Signal engine returned invalid data-quality metadata."
+            )
+
+        if data_quality.get("future_data_used") is not False:
             raise TradingPipelineError(
                 "Signal engine did not confirm future-data protection."
             )
 
-        if signal.get("data_quality", {}).get(
-            "closed_candles_only"
-        ) is not True:
+        if data_quality.get("closed_candles_only") is not True:
             raise TradingPipelineError(
                 "Signal engine did not confirm closed-candle usage."
             )
 
-        execution = signal.get("execution", {})
+        execution = signal.get("execution")
+
+        if not isinstance(execution, dict):
+            raise TradingPipelineError(
+                "Signal execution metadata is missing."
+            )
 
         if (
             execution.get("manual_review_only") is not True
