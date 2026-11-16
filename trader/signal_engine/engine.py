@@ -169,7 +169,9 @@ def _validate_input_data(
             details.append("missing: " + ", ".join(missing))
 
         if unknown:
-            details.append("unsupported: " + ", ".join(map(str, unknown)))
+            details.append(
+                "unsupported: " + ", ".join(map(str, unknown))
+            )
 
         raise TradingSignalEngineError(
             "Exactly 5m, 15m, 1h and 4h data are required. "
@@ -378,7 +380,10 @@ def _safe_float(value: Any) -> float | None:
     return result
 
 
-def _calculate_atr(candles: pd.DataFrame, period: int = 14) -> float:
+def _calculate_atr(
+    candles: pd.DataFrame,
+    period: int = 14,
+) -> float:
     """Calculate a simple average true range."""
 
     previous_close = candles["close"].shift(1)
@@ -392,7 +397,9 @@ def _calculate_atr(candles: pd.DataFrame, period: int = 14) -> float:
         axis=1,
     ).max(axis=1)
 
-    atr = true_range.tail(min(period, len(true_range))).mean()
+    atr = true_range.tail(
+        min(period, len(true_range))
+    ).mean()
 
     result = float(atr)
 
@@ -407,13 +414,7 @@ def _calculate_atr(candles: pd.DataFrame, period: int = 14) -> float:
 def _build_signal_identity(
     data: dict[str, pd.DataFrame],
 ) -> str:
-    """
-    Build a deterministic identity from every validated candle.
-
-    All timestamps, OHLCV values and source identifiers contribute
-    to the hash. A revision to any historical candle therefore
-    creates a new signal identity.
-    """
+    """Build a deterministic identity from every validated candle."""
 
     identity: dict[str, list[dict[str, Any]]] = {}
 
@@ -469,42 +470,71 @@ def _calculate_confidence(
 ) -> tuple[float, list[str]]:
     """Calculate a transparent rule-based confidence score."""
 
-    score = max(0.0, min(40.0, alignment_ratio * 40.0))
     reasons: list[str] = []
 
-    if overall_direction != "NEUTRAL":
+    if overall_direction == "NEUTRAL":
         reasons.append(
-            f"Multi-timeframe direction: {overall_direction}."
+            "Confidence is zero because the overall market direction is neutral."
         )
+        return 0.0, reasons
+
+    score = max(
+        0.0,
+        min(40.0, alignment_ratio * 40.0),
+    )
+
+    reasons.append(
+        f"Multi-timeframe direction: {overall_direction}."
+    )
 
     if structure_direction == overall_direction:
         score += 20.0
-        reasons.append("Market structure confirms the directional bias.")
+        reasons.append(
+            "Market structure confirms the directional bias."
+        )
     elif structure_direction != "NEUTRAL":
-        reasons.append("Market structure conflicts with the directional bias.")
+        reasons.append(
+            "Market structure conflicts with the directional bias."
+        )
 
     if order_block_direction == overall_direction:
         score += 15.0
-        reasons.append("An active order block supports the directional bias.")
+        reasons.append(
+            "An active order block supports the directional bias."
+        )
 
     if pattern_direction == overall_direction:
         score += 10.0
-        reasons.append("Candlestick patterns support the directional bias.")
+        reasons.append(
+            "Candlestick patterns support the directional bias."
+        )
 
     if volume_direction == overall_direction:
         score += 10.0
-        reasons.append("Volume confirmation supports the directional bias.")
+        reasons.append(
+            "Volume confirmation supports the directional bias."
+        )
 
     if conflict_count == 0:
         score += 5.0
-        reasons.append("No directional conflict was detected between timeframes.")
+        reasons.append(
+            "No directional conflict was detected between timeframes."
+        )
     else:
         reasons.append(
             f"{conflict_count} timeframe conflicts were detected."
         )
-        score -= min(20.0, conflict_count * 5.0)
+        score -= min(
+            20.0,
+            conflict_count * 5.0,
+        )
 
-    return round(max(0.0, min(100.0, score)), 2), reasons
+    confidence = round(
+        max(0.0, min(100.0, score)),
+        2,
+    )
+
+    return confidence, reasons
 
 
 def _select_order_block_direction(
@@ -573,27 +603,77 @@ def _select_order_block_direction(
 def _select_pattern_direction(
     pattern_results: dict[str, pd.DataFrame],
 ) -> str:
-    """Determine the dominant direction of newly detected patterns."""
+    """
+    Determine pattern direction using only the latest patterns
+    independently selected for each timeframe.
+    """
 
-    bullish = 0
-    bearish = 0
+    bullish_votes = 0
+    bearish_votes = 0
 
-    for patterns in pattern_results.values():
+    for timeframe in SUPPORTED_TIMEFRAMES:
+        patterns = pattern_results.get(timeframe)
+
+        if not isinstance(patterns, pd.DataFrame):
+            continue
+
         if patterns.empty:
             continue
 
-        for value in patterns["direction"].tolist():
+        if "direction" not in patterns.columns:
+            continue
+
+        if "close_time" in patterns.columns:
+            timestamp_column = "close_time"
+        elif "open_time" in patterns.columns:
+            timestamp_column = "open_time"
+        else:
+            continue
+
+        latest_patterns = patterns.copy()
+
+        latest_patterns["_pattern_timestamp"] = pd.to_datetime(
+            latest_patterns[timestamp_column],
+            errors="coerce",
+            utc=True,
+        )
+
+        latest_patterns = latest_patterns.dropna(
+            subset=["_pattern_timestamp"]
+        )
+
+        if latest_patterns.empty:
+            continue
+
+        latest_time = latest_patterns[
+            "_pattern_timestamp"
+        ].max()
+
+        latest_patterns = latest_patterns.loc[
+            latest_patterns["_pattern_timestamp"] == latest_time
+        ]
+
+        timeframe_bullish = 0
+        timeframe_bearish = 0
+
+        for value in latest_patterns["direction"]:
             direction = _direction(value)
 
             if direction == "BULLISH":
-                bullish += 1
+                timeframe_bullish += 1
             elif direction == "BEARISH":
-                bearish += 1
+                timeframe_bearish += 1
 
-    if bullish > bearish:
+        if timeframe_bullish > timeframe_bearish:
+            bullish_votes += 1
+
+        elif timeframe_bearish > timeframe_bullish:
+            bearish_votes += 1
+
+    if bullish_votes > bearish_votes:
         return "BULLISH"
 
-    if bearish > bullish:
+    if bearish_votes > bullish_votes:
         return "BEARISH"
 
     return "NEUTRAL"
@@ -632,7 +712,9 @@ def _build_risk_levels(
 
         targets = [
             entry_upper + (risk * 1.0),
-            entry_upper + (risk * max(1.5, minimum_risk_reward)),
+            entry_upper + (
+                risk * max(1.5, minimum_risk_reward)
+            ),
             entry_upper + (risk * 2.0),
         ]
 
@@ -654,7 +736,9 @@ def _build_risk_levels(
 
         targets = [
             entry_lower - (risk * 1.0),
-            entry_lower - (risk * max(1.5, minimum_risk_reward)),
+            entry_lower - (
+                risk * max(1.5, minimum_risk_reward)
+            ),
             entry_lower - (risk * 2.0),
         ]
 
@@ -665,7 +749,9 @@ def _build_risk_levels(
 
     reward = abs(
         targets[-1] - (
-            entry_upper if direction == "BULLISH" else entry_lower
+            entry_upper
+            if direction == "BULLISH"
+            else entry_lower
         )
     )
 
@@ -703,11 +789,13 @@ def _build_risk_levels(
                 "level": index + 1,
                 "price": round(target, 8),
                 "risk_reward": round(
-                    abs(target - (
-                        entry_upper
-                        if direction == "BULLISH"
-                        else entry_lower
-                    )) / risk,
+                    abs(
+                        target - (
+                            entry_upper
+                            if direction == "BULLISH"
+                            else entry_lower
+                        )
+                    ) / risk,
                     4,
                 ),
             }
@@ -782,7 +870,10 @@ def _calculate_position_risk(
             1.0 + (1.0 / leverage) - maintenance_margin_rate
         )
 
-    if liquidation_price <= 0 or not math.isfinite(liquidation_price):
+    if (
+        liquidation_price <= 0
+        or not math.isfinite(liquidation_price)
+    ):
         liquidation_price = None
 
     return {
@@ -805,24 +896,7 @@ def _calculate_position_risk(
 
 
 class TradingSignalEngine:
-    """
-    Generate trading signals for manual review.
-
-    Features:
-    - LONG, SHORT and NO_TRADE outputs.
-    - Multi-timeframe confirmation.
-    - Market structure analysis.
-    - Order block and FVG context.
-    - Candlestick pattern confirmation.
-    - Confidence scoring and conflict rejection.
-    - Entry, stop-loss and take-profit levels.
-    - Risk/reward and optional position sizing.
-    - Estimated liquidation reference.
-    - UTC timestamps and closed candles only.
-    - In-memory signal and rejection history.
-
-    This module never connects to an exchange or executes trades.
-    """
+    """Generate trading signals for manual review."""
 
     def __init__(
         self,
