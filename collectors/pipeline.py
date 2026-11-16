@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,12 @@ from collectors.kraken_ohlcv import (
     KrakenCollectorError,
     collect_kraken_ohlcv,
 )
+
+from config.loader import (
+    ConfigurationError,
+    load_config,
+)
+
 from validation.pipeline import (
     ValidationPipelineError,
     run_candle_validation,
@@ -48,29 +56,86 @@ def _validate_utc_datetime(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _validate_max_age(value: Any) -> float:
+    """Validate a positive finite maximum age."""
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(
+            "max_age_minutes must be a positive finite number."
+        )
+
+    return float(value)
+
+
 def _resolve_max_age(
-    timeframe: str,
     max_age_minutes: float | None,
-) -> float:
-    """Resolve the maximum allowed candle age."""
+    config: dict[str, Any],
+) -> float | None:
+    """
+    Resolve candle freshness from project configuration.
+
+    An explicit max_age_minutes value takes precedence
+    over the configured freshness limit.
+    """
 
     if max_age_minutes is not None:
+        return _validate_max_age(max_age_minutes)
 
-        if (
-            isinstance(max_age_minutes, bool)
-            or not isinstance(max_age_minutes, (int, float))
-            or max_age_minutes <= 0
-        ):
+    try:
+
+        quality = config["data_quality"]
+
+        freshness = quality["freshness"]
+
+        enabled = freshness["enabled"]
+
+        reject_stale = freshness["reject_stale_data"]
+
+        if not isinstance(enabled, bool):
             raise ValueError(
-                "max_age_minutes must be a positive number."
+                "freshness.enabled must be a boolean."
             )
 
-        return float(max_age_minutes)
+        if not isinstance(reject_stale, bool):
+            raise ValueError(
+                "freshness.reject_stale_data must be a boolean."
+            )
 
-    interval = TIMEFRAME_MINUTES[timeframe]
+        if not enabled or not reject_stale:
+            return None
 
-    # Allow up to three candle intervals for collection delays.
-    return float(interval * 3)
+        limits = freshness["max_age_minutes"]
+
+        if not isinstance(limits, dict):
+            raise ValueError(
+                "freshness.max_age_minutes must be a mapping."
+            )
+
+        if "candles" not in limits:
+            raise ValueError(
+                "Missing candles freshness configuration."
+            )
+
+        return _validate_max_age(
+            limits["candles"]
+        )
+
+    except (KeyError, TypeError) as exc:
+
+        raise KrakenPipelineError(
+            f"Invalid candle freshness configuration: {exc}"
+        ) from exc
+
+    except ValueError as exc:
+
+        raise KrakenPipelineError(
+            f"Invalid candle freshness configuration: {exc}"
+        ) from exc
 
 
 def run_kraken_pipeline(
@@ -84,17 +149,21 @@ def run_kraken_pipeline(
     timeout: float = 15,
 ) -> dict[str, Any]:
     """
-    Collect Kraken OHLCV data and validate newly collected candles.
+    Collect Kraken OHLCV data and validate new closed candles.
 
     Raw provider records are preserved by the collector.
 
     Only validated records are returned as accepted data.
     """
 
+    # Step 1: Validate timeframe.
+
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError(
             f"Unsupported timeframe: {timeframe}"
         )
+
+    # Step 2: Resolve collection timestamp.
 
     checked_at = (
         datetime.now(timezone.utc)
@@ -102,12 +171,26 @@ def run_kraken_pipeline(
         else _validate_utc_datetime(collection_time)
     )
 
+    # Step 3: Load project configuration.
+
+    try:
+
+        config = load_config()
+
+    except ConfigurationError as exc:
+
+        raise KrakenPipelineError(
+            f"Cannot load project configuration: {exc}"
+        ) from exc
+
+    # Step 4: Resolve freshness policy.
+
     age_limit = _resolve_max_age(
-        timeframe,
         max_age_minutes,
+        config,
     )
 
-    # Step 1: Collect and persist original Kraken data.
+    # Step 5: Collect and persist original Kraken data.
 
     try:
 
@@ -125,7 +208,7 @@ def run_kraken_pipeline(
             f"Kraken data collection failed: {exc}"
         ) from exc
 
-    # Step 2: Handle the absence of new closed candles.
+    # Step 6: Handle absence of new closed candles.
 
     if not records:
 
@@ -138,12 +221,13 @@ def run_kraken_pipeline(
             "rejected": pd.DataFrame(),
             "validation": None,
             "reports": [],
+            "max_age_minutes": age_limit,
             "message": (
                 "No new closed candles were available."
             ),
         }
 
-    # Step 3: Convert collected records into a DataFrame.
+    # Step 7: Prepare collected records for validation.
 
     try:
 
@@ -167,6 +251,7 @@ def run_kraken_pipeline(
         ]
 
         if missing_columns:
+
             raise KrakenPipelineError(
                 "Collected data is missing required columns: "
                 + ", ".join(missing_columns)
@@ -186,7 +271,7 @@ def run_kraken_pipeline(
             f"Cannot prepare collected data: {exc}"
         ) from exc
 
-    # Step 4: Validate collected candles.
+    # Step 8: Validate collected candles.
 
     try:
 
@@ -197,30 +282,60 @@ def run_kraken_pipeline(
             max_age_minutes=age_limit,
         )
 
-    except (ValidationPipelineError, ValueError, TypeError) as exc:
+    except (
+        ValidationPipelineError,
+        ValueError,
+        TypeError,
+    ) as exc:
 
         raise KrakenPipelineError(
             f"Kraken candle validation failed: {exc}"
         ) from exc
 
-    # Step 5: Return validated pipeline results.
+    # Step 9: Extract validation results.
 
-    accepted = validation_result["accepted"]
-    rejected = validation_result["rejected"]
+    try:
+
+        accepted = validation_result["accepted"]
+
+        rejected = validation_result["rejected"]
+
+        validation_report = validation_result["validation"]
+
+        reports = validation_result["reports"]
+
+    except (KeyError, TypeError) as exc:
+
+        raise KrakenPipelineError(
+            f"Invalid validation pipeline response: {exc}"
+        ) from exc
+
+    if (
+        not isinstance(accepted, pd.DataFrame)
+        or not isinstance(rejected, pd.DataFrame)
+    ):
+        raise KrakenPipelineError(
+            "Validation pipeline returned invalid data structures."
+        )
+
+    # Step 10: Return pipeline results.
+
+    status = (
+        "PASS"
+        if rejected.empty
+        else "FAIL"
+    )
 
     return {
-        "status": (
-            "PASS"
-            if rejected.empty
-            else "FAIL"
-        ),
+        "status": status,
         "pair": pair.upper(),
         "timeframe": timeframe,
         "collected_records": len(records),
         "accepted": accepted,
         "rejected": rejected,
-        "validation": validation_result["validation"],
-        "reports": validation_result["reports"],
+        "validation": validation_report,
+        "reports": reports,
+        "max_age_minutes": age_limit,
         "message": (
             "All collected candles passed validation."
             if rejected.empty
