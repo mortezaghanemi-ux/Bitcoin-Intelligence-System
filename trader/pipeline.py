@@ -1,3 +1,4 @@
+
 """Trading pipeline orchestration.
 
 Coordinates candle validation, freshness checks, signal generation
