@@ -407,25 +407,39 @@ def _calculate_atr(candles: pd.DataFrame, period: int = 14) -> float:
 def _build_signal_identity(
     data: dict[str, pd.DataFrame],
 ) -> str:
-    """Build a stable identity from the latest candle of every timeframe."""
+    """
+    Build a deterministic identity from every validated candle.
 
-    identity = {}
+    All timestamps, OHLCV values and source identifiers contribute
+    to the hash. A revision to any historical candle therefore
+    creates a new signal identity.
+    """
+
+    identity: dict[str, list[dict[str, Any]]] = {}
 
     for timeframe in SUPPORTED_TIMEFRAMES:
         candles = data[timeframe]
-        latest = candles.iloc[-1]
+        records: list[dict[str, Any]] = []
 
-        identity[timeframe] = {
-            "open_time": latest["open_time"].isoformat(),
-            "close_time": latest["close_time"].isoformat(),
-            "source": str(latest["source"]),
-            "close": round(float(latest["close"]), 10),
-        }
+        for row in candles.itertuples(index=False):
+            records.append({
+                "open_time": row.open_time.isoformat(),
+                "close_time": row.close_time.isoformat(),
+                "open": float(row.open),
+                "high": float(row.high),
+                "low": float(row.low),
+                "close": float(row.close),
+                "volume": float(row.volume),
+                "source": str(row.source),
+            })
+
+        identity[timeframe] = records
 
     encoded = json.dumps(
         identity,
         sort_keys=True,
         separators=(",", ":"),
+        allow_nan=False,
     ).encode("utf-8")
 
     return hashlib.sha256(encoded).hexdigest()
@@ -455,9 +469,8 @@ def _calculate_confidence(
 ) -> tuple[float, list[str]]:
     """Calculate a transparent rule-based confidence score."""
 
-    reasons: list[str] = []
-
     score = max(0.0, min(40.0, alignment_ratio * 40.0))
+    reasons: list[str] = []
 
     if overall_direction != "NEUTRAL":
         reasons.append(
@@ -650,10 +663,10 @@ def _build_risk_levels(
             "Risk levels require a directional signal."
         )
 
-    reward = (
-        abs(targets[-1] - (
+    reward = abs(
+        targets[-1] - (
             entry_upper if direction == "BULLISH" else entry_lower
-        ))
+        )
     )
 
     risk_reward = reward / risk
