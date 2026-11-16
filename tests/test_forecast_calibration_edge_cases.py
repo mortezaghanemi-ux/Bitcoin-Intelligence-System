@@ -21,12 +21,15 @@ from forecast.calibration import (
 )
 
 
+_DEFAULT_METADATA = object()
+
+
 def make_evaluation(
     forecast_id="forecast-001",
     actual_direction="BULLISH",
     probabilities=None,
     status="SUCCESS",
-    metadata=None,
+    metadata=_DEFAULT_METADATA,
 ):
     """Create a valid forecast evaluation."""
 
@@ -42,6 +45,12 @@ def make_evaluation(
         key=lambda direction: probabilities[direction],
     )
 
+    if metadata is _DEFAULT_METADATA:
+        metadata = {
+            "asset": "BTC",
+            "horizon_days": 7,
+        }
+
     return {
         "status": status,
         "forecast_id": forecast_id,
@@ -52,11 +61,7 @@ def make_evaluation(
             "probabilities": dict(probabilities),
             "predicted_direction": predicted_direction,
         },
-        "metadata": (
-            metadata
-            if metadata is not None
-            else {"asset": "BTC", "horizon_days": 7}
-        ),
+        "metadata": metadata,
     }
 
 
