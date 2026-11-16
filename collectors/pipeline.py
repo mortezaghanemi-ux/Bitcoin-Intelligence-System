@@ -92,49 +92,80 @@ def _resolve_max_age(
 
         freshness = quality["freshness"]
 
-        enabled = freshness["enabled"]
+    except (KeyError, TypeError) as exc:
 
-        reject_stale = freshness["reject_stale_data"]
+        raise KrakenPipelineError(
+            "Missing or invalid data quality freshness configuration."
+        ) from exc
 
-        if not isinstance(enabled, bool):
-            raise ValueError(
-                "freshness.enabled must be a boolean."
-            )
+    if not isinstance(freshness, dict):
 
-        if not isinstance(reject_stale, bool):
-            raise ValueError(
-                "freshness.reject_stale_data must be a boolean."
-            )
+        raise KrakenPipelineError(
+            "freshness configuration must be a mapping."
+        )
 
-        if not enabled or not reject_stale:
-            return None
+    if "enabled" not in freshness:
 
-        limits = freshness["max_age_minutes"]
+        raise KrakenPipelineError(
+            "Missing freshness.enabled configuration."
+        )
 
-        if not isinstance(limits, dict):
-            raise ValueError(
-                "freshness.max_age_minutes must be a mapping."
-            )
+    if "reject_stale_data" not in freshness:
 
-        if "candles" not in limits:
-            raise ValueError(
-                "Missing candles freshness configuration."
-            )
+        raise KrakenPipelineError(
+            "Missing freshness.reject_stale_data configuration."
+        )
+
+    enabled = freshness["enabled"]
+
+    reject_stale = freshness["reject_stale_data"]
+
+    if not isinstance(enabled, bool):
+
+        raise KrakenPipelineError(
+            "freshness.enabled must be a boolean."
+        )
+
+    if not isinstance(reject_stale, bool):
+
+        raise KrakenPipelineError(
+            "freshness.reject_stale_data must be a boolean."
+        )
+
+    if not enabled or not reject_stale:
+
+        return None
+
+    if "max_age_minutes" not in freshness:
+
+        raise KrakenPipelineError(
+            "Missing max_age_minutes freshness configuration."
+        )
+
+    limits = freshness["max_age_minutes"]
+
+    if not isinstance(limits, dict):
+
+        raise KrakenPipelineError(
+            "freshness.max_age_minutes must be a mapping."
+        )
+
+    if "candles" not in limits:
+
+        raise KrakenPipelineError(
+            "Missing candles freshness configuration."
+        )
+
+    try:
 
         return _validate_max_age(
             limits["candles"]
         )
 
-    except (KeyError, TypeError) as exc:
-
-        raise KrakenPipelineError(
-            f"Invalid candle freshness configuration: {exc}"
-        ) from exc
-
     except ValueError as exc:
 
         raise KrakenPipelineError(
-            f"Invalid candle freshness configuration: {exc}"
+            f"Invalid candles freshness configuration: {exc}"
         ) from exc
 
 
@@ -159,6 +190,7 @@ def run_kraken_pipeline(
     # Step 1: Validate timeframe.
 
     if timeframe not in TIMEFRAME_MINUTES:
+
         raise ValueError(
             f"Unsupported timeframe: {timeframe}"
         )
@@ -263,6 +295,7 @@ def run_kraken_pipeline(
         ].copy(deep=True)
 
     except KrakenPipelineError:
+
         raise
 
     except Exception as exc:
@@ -314,6 +347,7 @@ def run_kraken_pipeline(
         not isinstance(accepted, pd.DataFrame)
         or not isinstance(rejected, pd.DataFrame)
     ):
+
         raise KrakenPipelineError(
             "Validation pipeline returned invalid data structures."
         )
