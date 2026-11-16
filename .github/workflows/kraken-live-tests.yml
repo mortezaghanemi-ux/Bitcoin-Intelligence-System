@@ -8,9 +8,9 @@ permissions:
 
 jobs:
   kraken-live:
-    name: Run Live Kraken API Tests
+    name: Run Live Kraken Integration Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -33,5 +33,6 @@ jobs:
         env:
           RUN_KRAKEN_LIVE_TESTS: "1"
         run: |
-          python -m pytest -v \
-            tests/integration/test_kraken_live.py
+          python -m pytest -v -ra \
+            tests/integration/test_kraken_live.py \
+            tests/integration/test_trading_live.py
