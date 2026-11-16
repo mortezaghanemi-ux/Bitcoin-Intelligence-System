@@ -87,83 +87,69 @@ def _resolve_max_age(
         return _validate_max_age(max_age_minutes)
 
     try:
-
         quality = config["data_quality"]
-
         freshness = quality["freshness"]
 
     except (KeyError, TypeError) as exc:
-
         raise KrakenPipelineError(
             "Missing or invalid data quality freshness configuration."
         ) from exc
 
     if not isinstance(freshness, dict):
-
         raise KrakenPipelineError(
             "freshness configuration must be a mapping."
         )
 
     if "enabled" not in freshness:
-
         raise KrakenPipelineError(
             "Missing freshness.enabled configuration."
         )
 
     if "reject_stale_data" not in freshness:
-
         raise KrakenPipelineError(
             "Missing freshness.reject_stale_data configuration."
         )
 
     enabled = freshness["enabled"]
-
     reject_stale = freshness["reject_stale_data"]
 
     if not isinstance(enabled, bool):
-
         raise KrakenPipelineError(
             "freshness.enabled must be a boolean."
         )
 
     if not isinstance(reject_stale, bool):
-
         raise KrakenPipelineError(
             "freshness.reject_stale_data must be a boolean."
         )
 
     if not enabled or not reject_stale:
-
         return None
 
     if "max_age_minutes" not in freshness:
-
         raise KrakenPipelineError(
-            "Missing max_age_minutes freshness configuration."
+            "Missing candles freshness configuration: "
+            "max_age_minutes is not configured."
         )
 
     limits = freshness["max_age_minutes"]
 
     if not isinstance(limits, dict):
-
         raise KrakenPipelineError(
             "freshness.max_age_minutes must be a mapping."
         )
 
     if "candles" not in limits:
-
         raise KrakenPipelineError(
             "Missing candles freshness configuration."
         )
 
     try:
-
         return _validate_max_age(
             limits["candles"]
         )
 
     except ValueError as exc:
-
         raise KrakenPipelineError(
             f"Invalid candles freshness configuration: {exc}"
         ) from exc
@@ -190,7 +176,6 @@ def run_kraken_pipeline(
     # Step 1: Validate timeframe.
 
     if timeframe not in TIMEFRAME_MINUTES:
-
         raise ValueError(
             f"Unsupported timeframe: {timeframe}"
         )
@@ -206,11 +191,9 @@ def run_kraken_pipeline(
     # Step 3: Load project configuration.
 
     try:
-
         config = load_config()
 
     except ConfigurationError as exc:
-
         raise KrakenPipelineError(
             f"Cannot load project configuration: {exc}"
         ) from exc
@@ -225,7 +208,6 @@ def run_kraken_pipeline(
     # Step 5: Collect and persist original Kraken data.
 
     try:
-
         records = collect_kraken_ohlcv(
             pair=pair,
             timeframe=timeframe,
@@ -235,7 +217,6 @@ def run_kraken_pipeline(
         )
 
     except (KrakenCollectorError, ValueError) as exc:
-
         raise KrakenPipelineError(
             f"Kraken data collection failed: {exc}"
         ) from exc
@@ -243,7 +224,6 @@ def run_kraken_pipeline(
     # Step 6: Handle absence of new closed candles.
 
     if not records:
-
         return {
             "status": "NO_NEW_DATA",
             "pair": pair.upper(),
@@ -262,7 +242,6 @@ def run_kraken_pipeline(
     # Step 7: Prepare collected records for validation.
 
     try:
-
         data = pd.DataFrame(records)
 
         required_columns = [
@@ -283,7 +262,6 @@ def run_kraken_pipeline(
         ]
 
         if missing_columns:
-
             raise KrakenPipelineError(
                 "Collected data is missing required columns: "
                 + ", ".join(missing_columns)
@@ -295,11 +273,9 @@ def run_kraken_pipeline(
         ].copy(deep=True)
 
     except KrakenPipelineError:
-
         raise
 
     except Exception as exc:
-
         raise KrakenPipelineError(
             f"Cannot prepare collected data: {exc}"
         ) from exc
@@ -307,7 +283,6 @@ def run_kraken_pipeline(
     # Step 8: Validate collected candles.
 
     try:
-
         validation_result = run_candle_validation(
             validation_data,
             report_path=report_path,
@@ -320,7 +295,6 @@ def run_kraken_pipeline(
         ValueError,
         TypeError,
     ) as exc:
-
         raise KrakenPipelineError(
             f"Kraken candle validation failed: {exc}"
         ) from exc
@@ -328,17 +302,12 @@ def run_kraken_pipeline(
     # Step 9: Extract validation results.
 
     try:
-
         accepted = validation_result["accepted"]
-
         rejected = validation_result["rejected"]
-
         validation_report = validation_result["validation"]
-
         reports = validation_result["reports"]
 
     except (KeyError, TypeError) as exc:
-
         raise KrakenPipelineError(
             f"Invalid validation pipeline response: {exc}"
         ) from exc
@@ -347,7 +316,6 @@ def run_kraken_pipeline(
         not isinstance(accepted, pd.DataFrame)
         or not isinstance(rejected, pd.DataFrame)
     ):
-
         raise KrakenPipelineError(
             "Validation pipeline returned invalid data structures."
         )
