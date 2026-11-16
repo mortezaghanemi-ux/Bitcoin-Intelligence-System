@@ -840,6 +840,24 @@ def _calculate_position_risk(
         notional_value = quantity * entry_price
         required_margin = notional_value / leverage
 
+        if not all(
+            math.isfinite(value)
+            for value in (
+                risk_amount,
+                quantity,
+                notional_value,
+                required_margin,
+            )
+        ):
+            raise TradingSignalEngineError(
+                "Position sizing produced non-finite values."
+            )
+
+        if required_margin > float(account_equity):
+            raise TradingSignalEngineError(
+                "Required position margin exceeds available account equity."
+            )
+
         position = {
             "status": "CALCULATED",
             "account_equity": round(float(account_equity), 8),
