@@ -27,8 +27,6 @@ CANDLE_COUNT = 40
 
 @pytest.fixture
 def market_data():
-    """Create valid closed candles for every supported timeframe."""
-
     data = {}
 
     for timeframe in SUPPORTED_TIMEFRAMES:
@@ -44,7 +42,6 @@ def market_data():
             open_time = start + timedelta(
                 seconds=index * interval
             )
-
             close_time = open_time + timedelta(
                 seconds=interval
             )
@@ -69,8 +66,6 @@ def market_data():
 
 
 def build_identity(data):
-    """Validate market data before calculating its identity."""
-
     validated = _validate_input_data(
         data=data,
         analysis_time=pd.Timestamp(ANALYSIS_TIME),
@@ -89,20 +84,19 @@ def test_identical_market_data_produces_identical_identity(market_data):
 
 
 @pytest.mark.parametrize(
-    "column,new_value",
+    "column,change",
     [
-        ("open", 95123.0),
-        ("high", 95200.0),
-        ("low", 94900.0),
-        ("close", 95150.0),
-        ("volume", 999.0),
-        ("source", "coingecko"),
+        ("open", 0.25),
+        ("high", 0.25),
+        ("low", -0.25),
+        ("close", 0.25),
+        ("volume", 50.0),
     ],
 )
 def test_historical_candle_changes_identity(
     market_data,
     column,
-    new_value,
+    change,
 ):
     original_identity = build_identity(market_data)
 
@@ -111,17 +105,29 @@ def test_historical_candle_changes_identity(
         for timeframe, candles in market_data.items()
     }
 
-    # Change an old candle, not the latest candle.
     historical_index = 5
 
     changed_data["5m"].loc[
         historical_index,
         column,
-    ] = new_value
+    ] += change
 
     changed_identity = build_identity(changed_data)
 
     assert changed_identity != original_identity
+
+
+def test_historical_source_change_changes_identity(market_data):
+    original_identity = build_identity(market_data)
+
+    changed_data = {
+        timeframe: candles.copy(deep=True)
+        for timeframe, candles in market_data.items()
+    }
+
+    changed_data["5m"].loc[5, "source"] = "coingecko"
+
+    assert build_identity(changed_data) != original_identity
 
 
 @pytest.mark.parametrize(
@@ -139,8 +145,7 @@ def test_historical_change_in_every_timeframe_changes_identity(
         for key, candles in market_data.items()
     }
 
-    changed_data[timeframe].loc[5, "close"] += 1.0
-    changed_data[timeframe].loc[5, "high"] += 1.0
+    changed_data[timeframe].loc[5, "close"] += 0.25
 
     changed_identity = build_identity(changed_data)
 
@@ -157,24 +162,12 @@ def test_latest_candle_change_changes_identity(market_data):
 
     last_index = len(changed_data["5m"]) - 1
 
-    changed_data["5m"].loc[
-        last_index,
-        "close",
-    ] += 1.0
+    changed_data["5m"].loc[last_index, "close"] += 0.25
 
-    changed_data["5m"].loc[
-        last_index,
-        "high",
-    ] += 1.0
-
-    changed_identity = build_identity(changed_data)
-
-    assert changed_identity != original_identity
+    assert build_identity(changed_data) != original_identity
 
 
-def test_change_in_one_timeframe_does_not_require_other_changes(
-    market_data,
-):
+def test_change_in_one_timeframe_changes_identity(market_data):
     original_identity = build_identity(market_data)
 
     changed_data = {
@@ -184,9 +177,7 @@ def test_change_in_one_timeframe_does_not_require_other_changes(
 
     changed_data["1h"].loc[10, "volume"] += 50.0
 
-    changed_identity = build_identity(changed_data)
-
-    assert changed_identity != original_identity
+    assert build_identity(changed_data) != original_identity
 
 
 def test_original_market_data_is_not_modified(market_data):
@@ -204,7 +195,7 @@ def test_original_market_data_is_not_modified(market_data):
         )
 
 
-def test_identity_is_a_sha256_hex_digest(market_data):
+def test_identity_is_sha256_hex_digest(market_data):
     identity = build_identity(market_data)
 
     assert len(identity) == 64
