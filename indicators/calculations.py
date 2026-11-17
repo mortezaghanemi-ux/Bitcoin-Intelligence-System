@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
 
@@ -39,10 +40,9 @@ class IndicatorCalculationError(RuntimeError):
 def _load_config(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Load indicator configuration."""
+    """Load and validate indicator configuration."""
 
     if config is not None:
-
         if not isinstance(config, dict):
             raise TypeError("config must be a dictionary")
 
@@ -57,22 +57,18 @@ def _load_config(
         return config
 
     try:
-
         with DEFAULT_CONFIG_PATH.open(
             "r",
             encoding="utf-8",
         ) as file:
-
             loaded = yaml.safe_load(file)
 
     except (OSError, yaml.YAMLError) as exc:
-
         raise IndicatorCalculationError(
             f"Cannot load indicator configuration: {exc}"
         ) from exc
 
     if not isinstance(loaded, dict):
-
         raise IndicatorCalculationError(
             "Indicator configuration must be a mapping."
         )
@@ -80,7 +76,6 @@ def _load_config(
     indicators = loaded.get("indicators")
 
     if not isinstance(indicators, dict):
-
         raise IndicatorCalculationError(
             "Missing indicators configuration."
         )
@@ -89,18 +84,19 @@ def _load_config(
 
 
 def _validate_candles(data: pd.DataFrame) -> pd.DataFrame:
-    """Validate the structure and integrity of candle data."""
+    """Validate OHLCV data and UTC timestamps."""
 
     if not isinstance(data, pd.DataFrame):
-
-        raise TypeError(
-            "data must be a pandas DataFrame"
-        )
+        raise TypeError("data must be a pandas DataFrame")
 
     if data.empty:
-
         raise IndicatorCalculationError(
             "Cannot calculate indicators from empty data."
+        )
+
+    if not data.columns.is_unique:
+        raise IndicatorCalculationError(
+            "Duplicate DataFrame columns are not allowed."
         )
 
     missing = [
@@ -110,53 +106,48 @@ def _validate_candles(data: pd.DataFrame) -> pd.DataFrame:
     ]
 
     if missing:
-
         raise IndicatorCalculationError(
-            "Missing candle columns: "
-            + ", ".join(missing)
+            "Missing candle columns: " + ", ".join(missing)
         )
 
     result = data.copy(deep=True)
 
     for column in NUMERIC_COLUMNS:
+        values = result[column]
 
         if (
-            not pd.api.types.is_numeric_dtype(
-                result[column]
-            )
-            or pd.api.types.is_bool_dtype(
-                result[column]
-            )
+            not pd.api.types.is_numeric_dtype(values)
+            or pd.api.types.is_bool_dtype(values)
+            or pd.api.types.is_complex_dtype(values)
         ):
-
             raise IndicatorCalculationError(
-                f"{column} must contain numeric values."
+                f"{column} must contain real numeric values."
             )
 
-        values = result[column].to_numpy(dtype=float)
+        try:
+            numeric_values = values.to_numpy(dtype=float)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise IndicatorCalculationError(
+                f"{column} contains invalid numeric values."
+            ) from exc
 
-        if not np.isfinite(values).all():
-
+        if not np.isfinite(numeric_values).all():
             raise IndicatorCalculationError(
                 f"{column} contains non-finite values."
             )
 
     if (result["volume"] < 0).any():
-
         raise IndicatorCalculationError(
             "Volume cannot be negative."
         )
 
-    if (
-        (result["open"] <= 0).any()
-        or (result["high"] <= 0).any()
-        or (result["low"] <= 0).any()
-        or (result["close"] <= 0).any()
-    ):
+    price_columns = ("open", "high", "low", "close")
 
-        raise IndicatorCalculationError(
-            "Prices must be greater than zero."
-        )
+    for column in price_columns:
+        if (result[column] <= 0).any():
+            raise IndicatorCalculationError(
+                "Prices must be greater than zero."
+            )
 
     invalid_ohlc = (
         (result["high"] < result["low"])
@@ -167,23 +158,18 @@ def _validate_candles(data: pd.DataFrame) -> pd.DataFrame:
     )
 
     if invalid_ohlc.any():
-
         raise IndicatorCalculationError(
             "Invalid OHLC candle relationships detected."
         )
 
     for column in ("open_time", "close_time"):
-
         try:
-
             timestamps = pd.to_datetime(
                 result[column],
                 errors="raise",
                 utc=False,
             )
-
-        except (TypeError, ValueError) as exc:
-
+        except (TypeError, ValueError, OverflowError) as exc:
             raise IndicatorCalculationError(
                 f"Invalid {column} timestamps."
             ) from exc
@@ -192,37 +178,40 @@ def _validate_candles(data: pd.DataFrame) -> pd.DataFrame:
             timestamps.dtype,
             pd.DatetimeTZDtype,
         ):
-
             raise IndicatorCalculationError(
                 f"{column} must contain timezone-aware timestamps."
             )
 
         if str(timestamps.dt.tz) != "UTC":
-
             raise IndicatorCalculationError(
                 f"{column} timestamps must use UTC."
             )
 
+        if timestamps.isna().any():
+            raise IndicatorCalculationError(
+                f"{column} cannot contain missing timestamps."
+            )
+
         result[column] = timestamps
 
-    if (
-        result["close_time"] <= result["open_time"]
-    ).any():
-
+    if (result["close_time"] <= result["open_time"]).any():
         raise IndicatorCalculationError(
             "Candle close_time must be after open_time."
         )
 
     if result["open_time"].duplicated().any():
-
         raise IndicatorCalculationError(
             "Duplicate candle timestamps detected."
         )
 
     if not result["open_time"].is_monotonic_increasing:
-
         raise IndicatorCalculationError(
             "Candles must be sorted by open_time."
+        )
+
+    if not result["close_time"].is_monotonic_increasing:
+        raise IndicatorCalculationError(
+            "Candles must be sorted by close_time."
         )
 
     return result.reset_index(drop=True)
@@ -233,15 +222,30 @@ def _period(value: Any, name: str) -> int:
 
     if (
         isinstance(value, bool)
-        or not isinstance(value, int)
+        or not isinstance(value, Integral)
         or value <= 0
     ):
-
         raise IndicatorCalculationError(
             f"{name} must be a positive integer."
         )
 
-    return value
+    return int(value)
+
+
+def _positive_number(value: Any, name: str) -> float:
+    """Validate a positive finite numeric parameter."""
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not np.isfinite(value)
+        or value <= 0
+    ):
+        raise IndicatorCalculationError(
+            f"{name} must be a positive finite number."
+        )
+
+    return float(value)
 
 
 def _enabled(section: dict, name: str) -> bool:
@@ -250,7 +254,6 @@ def _enabled(section: dict, name: str) -> bool:
     settings = section.get(name, {})
 
     if not isinstance(settings, dict):
-
         raise IndicatorCalculationError(
             f"Invalid configuration for {name}."
         )
@@ -258,7 +261,6 @@ def _enabled(section: dict, name: str) -> bool:
     enabled = settings.get("enabled", True)
 
     if not isinstance(enabled, bool):
-
         raise IndicatorCalculationError(
             f"{name}.enabled must be boolean."
         )
@@ -272,12 +274,34 @@ def _settings(section: dict, name: str) -> dict:
     value = section.get(name, {})
 
     if not isinstance(value, dict):
-
         raise IndicatorCalculationError(
             f"Invalid configuration for {name}."
         )
 
     return value
+
+
+def _periods(settings: dict, name: str, defaults: list[int]) -> list[int]:
+    """Validate a non-empty list of indicator periods."""
+
+    values = settings.get("periods", defaults)
+
+    if not isinstance(values, list) or not values:
+        raise IndicatorCalculationError(
+            f"{name} periods must be a non-empty list."
+        )
+
+    validated = [
+        _period(value, f"{name} period")
+        for value in values
+    ]
+
+    if len(validated) != len(set(validated)):
+        raise IndicatorCalculationError(
+            f"{name} periods must not contain duplicates."
+        )
+
+    return validated
 
 
 def _ema(series: pd.Series, period: int) -> pd.Series:
@@ -323,9 +347,7 @@ def _rsi(series: pd.Series, period: int) -> pd.Series:
         average_gain / average_loss.replace(0, np.nan)
     )
 
-    result = 100 - (
-        100 / (1 + relative_strength)
-    )
+    result = 100 - (100 / (1 + relative_strength))
 
     result = result.mask(
         (average_loss == 0) & (average_gain > 0),
@@ -342,7 +364,7 @@ def _rsi(series: pd.Series, period: int) -> pd.Series:
         50.0,
     )
 
-    return result
+    return result.clip(lower=0, upper=100)
 
 
 def _true_range(data: pd.DataFrame) -> pd.Series:
@@ -379,7 +401,6 @@ def _adx(
     """Calculate ADX, positive DI and negative DI."""
 
     upward = data["high"].diff()
-
     downward = -data["low"].diff()
 
     positive_dm = upward.where(
@@ -430,7 +451,11 @@ def _adx(
         min_periods=period,
     ).mean()
 
-    return adx, positive_di, negative_di
+    return (
+        adx.clip(0, 100),
+        positive_di.clip(0, 100),
+        negative_di.clip(0, 100),
+    )
 
 
 def _macd(
@@ -442,7 +467,6 @@ def _macd(
     """Calculate MACD, signal and histogram."""
 
     if fast >= slow:
-
         raise IndicatorCalculationError(
             "MACD fast period must be smaller than slow period."
         )
@@ -480,10 +504,7 @@ def _stochastic(
         min_periods=k_period,
     ).max()
 
-    denominator = (highest - lowest).replace(
-        0,
-        np.nan,
-    )
+    denominator = (highest - lowest).replace(0, np.nan)
 
     k_line = (
         100
@@ -496,19 +517,14 @@ def _stochastic(
         min_periods=d_period,
     ).mean()
 
-    return k_line, d_line
+    return k_line.clip(0, 100), d_line.clip(0, 100)
 
 
-def _cci(
-    data: pd.DataFrame,
-    period: int,
-) -> pd.Series:
+def _cci(data: pd.DataFrame, period: int) -> pd.Series:
     """Calculate Commodity Channel Index."""
 
     typical_price = (
-        data["high"]
-        + data["low"]
-        + data["close"]
+        data["high"] + data["low"] + data["close"]
     ) / 3
 
     average = typical_price.rolling(
@@ -548,28 +564,19 @@ def _williams_r(
         min_periods=period,
     ).min()
 
-    denominator = (highest - lowest).replace(
-        0,
-        np.nan,
-    )
+    denominator = (highest - lowest).replace(0, np.nan)
 
     return (
         -100
         * (highest - data["close"])
         / denominator
-    )
+    ).clip(-100, 0)
 
 
-def _roc(
-    series: pd.Series,
-    period: int,
-) -> pd.Series:
+def _roc(series: pd.Series, period: int) -> pd.Series:
     """Calculate Rate of Change."""
 
-    previous = series.shift(period).replace(
-        0,
-        np.nan,
-    )
+    previous = series.shift(period).replace(0, np.nan)
 
     return (
         (series - previous)
@@ -605,27 +612,17 @@ def _obv(data: pd.DataFrame) -> pd.Series:
         data["close"].diff()
     ).fillna(0)
 
-    return (
-        direction * data["volume"]
-    ).cumsum()
+    return (direction * data["volume"]).cumsum()
 
 
-def _mfi(
-    data: pd.DataFrame,
-    period: int,
-) -> pd.Series:
+def _mfi(data: pd.DataFrame, period: int) -> pd.Series:
     """Calculate Money Flow Index."""
 
     typical_price = (
-        data["high"]
-        + data["low"]
-        + data["close"]
+        data["high"] + data["low"] + data["close"]
     ) / 3
 
-    raw_money_flow = (
-        typical_price * data["volume"]
-    )
-
+    raw_money_flow = typical_price * data["volume"]
     direction = typical_price.diff()
 
     positive_flow = raw_money_flow.where(
@@ -649,13 +646,10 @@ def _mfi(
     ).sum()
 
     ratio = (
-        positive_sum
-        / negative_sum.replace(0, np.nan)
+        positive_sum / negative_sum.replace(0, np.nan)
     )
 
-    result = 100 - (
-        100 / (1 + ratio)
-    )
+    result = 100 - (100 / (1 + ratio))
 
     result = result.mask(
         (negative_sum == 0) & (positive_sum > 0),
@@ -672,22 +666,17 @@ def _mfi(
         50.0,
     )
 
-    return result
+    return result.clip(0, 100)
 
 
 def _vwap(data: pd.DataFrame) -> pd.Series:
     """Calculate cumulative VWAP for the supplied dataset."""
 
     typical_price = (
-        data["high"]
-        + data["low"]
-        + data["close"]
+        data["high"] + data["low"] + data["close"]
     ) / 3
 
-    money_flow = (
-        typical_price * data["volume"]
-    )
-
+    money_flow = typical_price * data["volume"]
     cumulative_volume = data["volume"].cumsum()
 
     return (
@@ -703,8 +692,11 @@ def _parabolic_sar(
 ) -> pd.Series:
     """Calculate Parabolic SAR without future candle data."""
 
-    if not 0 < step <= maximum <= 1:
-
+    if (
+        not np.isfinite(step)
+        or not np.isfinite(maximum)
+        or not 0 < step <= maximum <= 1
+    ):
         raise IndicatorCalculationError(
             "Invalid Parabolic SAR parameters."
         )
@@ -713,7 +705,6 @@ def _parabolic_sar(
     low = data["low"].to_numpy(dtype=float)
 
     size = len(data)
-
     result = np.full(size, np.nan)
 
     if size < 2:
@@ -722,76 +713,59 @@ def _parabolic_sar(
     bullish = data["close"].iloc[1] >= data["close"].iloc[0]
 
     extreme_point = high[0] if bullish else low[0]
-
     sar = low[0] if bullish else high[0]
-
     acceleration = step
 
     for index in range(1, size):
-
         current_sar = sar + acceleration * (
             extreme_point - sar
         )
 
         if bullish:
-
             current_sar = min(
                 current_sar,
                 low[index - 1],
             )
 
             if index >= 2:
-
                 current_sar = min(
                     current_sar,
                     low[index - 2],
                 )
 
             if low[index] < current_sar:
-
                 bullish = False
                 current_sar = extreme_point
                 extreme_point = low[index]
                 acceleration = step
-
             else:
-
                 if high[index] > extreme_point:
-
                     extreme_point = high[index]
-
                     acceleration = min(
                         acceleration + step,
                         maximum,
                     )
 
         else:
-
             current_sar = max(
                 current_sar,
                 high[index - 1],
             )
 
             if index >= 2:
-
                 current_sar = max(
                     current_sar,
                     high[index - 2],
                 )
 
             if high[index] > current_sar:
-
                 bullish = True
                 current_sar = extreme_point
                 extreme_point = high[index]
                 acceleration = step
-
             else:
-
                 if low[index] < extreme_point:
-
                     extreme_point = low[index]
-
                     acceleration = min(
                         acceleration + step,
                         maximum,
@@ -800,10 +774,7 @@ def _parabolic_sar(
         sar = current_sar
         result[index] = sar
 
-    return pd.Series(
-        result,
-        index=data.index,
-    )
+    return pd.Series(result, index=data.index)
 
 
 def calculate_indicators(
@@ -813,34 +784,17 @@ def calculate_indicators(
     """
     Calculate configured technical indicators.
 
-    Parameters
-    ----------
-    data:
-        Validated, UTC, chronological OHLCV candle data.
-    config:
-        Optional indicator configuration mapping.
-        When omitted, config/indicators.yaml is loaded.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A copy of the input data with calculated indicator columns.
-
-    Notes
-    -----
-    - Input data is never modified.
-    - Rolling warm-up periods produce NaN values.
-    - No future candle information is used.
-    - Ichimoku spans are not shifted into the future.
-    - VWAP is cumulative over the supplied dataset.
+    Input data is never modified.
+    Rolling warm-up periods produce NaN values.
+    Calculations do not use future candles.
+    Ichimoku spans are not shifted into the future.
+    VWAP is cumulative over the supplied dataset.
     """
 
     candles = _validate_candles(data)
-
     settings = _load_config(config)
 
     if not isinstance(settings.get("enabled"), bool):
-
         raise IndicatorCalculationError(
             "indicators.enabled must be boolean."
         )
@@ -851,9 +805,7 @@ def calculate_indicators(
     result = candles.copy(deep=True)
 
     close = candles["close"]
-
     high = candles["high"]
-
     low = candles["low"]
 
     # Trend indicators
@@ -861,55 +813,32 @@ def calculate_indicators(
     trend = _settings(settings, "trend")
 
     if _enabled(trend, "ema"):
-
         ema_settings = _settings(trend, "ema")
 
-        periods = ema_settings.get(
-            "periods",
+        for period in _periods(
+            ema_settings,
+            "EMA",
             [20, 50, 100, 200],
-        )
-
-        if not isinstance(periods, list) or not periods:
-
-            raise IndicatorCalculationError(
-                "EMA periods must be a non-empty list."
-            )
-
-        for value in periods:
-
-            period = _period(value, "EMA period")
-
+        ):
             result[f"ema_{period}"] = _ema(
                 close,
                 period,
             )
 
     if _enabled(trend, "sma"):
-
         sma_settings = _settings(trend, "sma")
 
-        periods = sma_settings.get(
-            "periods",
+        for period in _periods(
+            sma_settings,
+            "SMA",
             [20, 50, 100, 200],
-        )
-
-        if not isinstance(periods, list) or not periods:
-
-            raise IndicatorCalculationError(
-                "SMA periods must be a non-empty list."
-            )
-
-        for value in periods:
-
-            period = _period(value, "SMA period")
-
+        ):
             result[f"sma_{period}"] = _sma(
                 close,
                 period,
             )
 
     if _enabled(trend, "adx"):
-
         period = _period(
             _settings(trend, "adx").get("period", 14),
             "ADX period",
@@ -925,7 +854,6 @@ def calculate_indicators(
         result[f"minus_di_{period}"] = negative_di
 
     if _enabled(trend, "ichimoku"):
-
         ichimoku = _settings(trend, "ichimoku")
 
         tenkan_period = _period(
@@ -991,33 +919,25 @@ def calculate_indicators(
         ) / 2
 
     if _enabled(trend, "parabolic_sar"):
-
         sar_settings = _settings(
             trend,
             "parabolic_sar",
         )
 
-        step = sar_settings.get("step", 0.02)
+        step = _positive_number(
+            sar_settings.get("step", 0.02),
+            "Parabolic SAR step",
+        )
 
-        maximum = sar_settings.get("maximum", 0.2)
-
-        if (
-            isinstance(step, bool)
-            or isinstance(maximum, bool)
-            or not isinstance(step, (int, float))
-            or not isinstance(maximum, (int, float))
-            or not np.isfinite(step)
-            or not np.isfinite(maximum)
-        ):
-
-            raise IndicatorCalculationError(
-                "Invalid Parabolic SAR parameters."
-            )
+        maximum = _positive_number(
+            sar_settings.get("maximum", 0.2),
+            "Parabolic SAR maximum",
+        )
 
         result["parabolic_sar"] = _parabolic_sar(
             candles,
-            float(step),
-            float(maximum),
+            step,
+            maximum,
         )
 
     # Momentum indicators
@@ -1025,7 +945,6 @@ def calculate_indicators(
     momentum = _settings(settings, "momentum")
 
     if _enabled(momentum, "rsi"):
-
         period = _period(
             _settings(momentum, "rsi").get("period", 14),
             "RSI period",
@@ -1037,7 +956,6 @@ def calculate_indicators(
         )
 
     if _enabled(momentum, "macd"):
-
         macd_settings = _settings(momentum, "macd")
 
         fast = _period(
@@ -1067,7 +985,6 @@ def calculate_indicators(
         result["macd_histogram"] = histogram
 
     if _enabled(momentum, "stochastic"):
-
         stochastic = _settings(
             momentum,
             "stochastic",
@@ -1093,7 +1010,6 @@ def calculate_indicators(
         result["stochastic_d"] = d_line
 
     if _enabled(momentum, "cci"):
-
         period = _period(
             _settings(momentum, "cci").get("period", 20),
             "CCI period",
@@ -1105,9 +1021,11 @@ def calculate_indicators(
         )
 
     if _enabled(momentum, "williams_r"):
-
         period = _period(
-            _settings(momentum, "williams_r").get("period", 14),
+            _settings(momentum, "williams_r").get(
+                "period",
+                14,
+            ),
             "Williams %R period",
         )
 
@@ -1117,7 +1035,6 @@ def calculate_indicators(
         )
 
     if _enabled(momentum, "roc"):
-
         period = _period(
             _settings(momentum, "roc").get("period", 12),
             "ROC period",
@@ -1133,7 +1050,6 @@ def calculate_indicators(
     volatility = _settings(settings, "volatility")
 
     if _enabled(volatility, "atr"):
-
         period = _period(
             _settings(volatility, "atr").get("period", 14),
             "ATR period",
@@ -1145,7 +1061,6 @@ def calculate_indicators(
         )
 
     if _enabled(volatility, "bollinger_bands"):
-
         bands = _settings(
             volatility,
             "bollinger_bands",
@@ -1156,26 +1071,15 @@ def calculate_indicators(
             "Bollinger period",
         )
 
-        deviations = bands.get(
-            "standard_deviation",
-            2,
+        deviations = _positive_number(
+            bands.get("standard_deviation", 2),
+            "Bollinger standard deviation",
         )
-
-        if (
-            isinstance(deviations, bool)
-            or not isinstance(deviations, (int, float))
-            or not np.isfinite(deviations)
-            or deviations <= 0
-        ):
-
-            raise IndicatorCalculationError(
-                "Bollinger standard deviation must be positive."
-            )
 
         upper, middle, lower = _bollinger(
             close,
             period,
-            float(deviations),
+            deviations,
         )
 
         result["bollinger_upper"] = upper
@@ -1187,7 +1091,6 @@ def calculate_indicators(
     volume = _settings(settings, "volume")
 
     if _enabled(volume, "volume_sma"):
-
         period = _period(
             _settings(volume, "volume_sma").get(
                 "period",
@@ -1202,11 +1105,9 @@ def calculate_indicators(
         )
 
     if _enabled(volume, "obv"):
-
         result["obv"] = _obv(candles)
 
     if _enabled(volume, "mfi"):
-
         period = _period(
             _settings(volume, "mfi").get("period", 14),
             "MFI period",
@@ -1218,14 +1119,10 @@ def calculate_indicators(
         )
 
     if _enabled(volume, "vwap"):
-
         result["vwap"] = _vwap(candles)
 
     return result
 
 
 if __name__ == "__main__":
-
-    print(
-        "Technical indicator calculation module loaded."
-    )
+    print("Technical indicator calculation module loaded.")
