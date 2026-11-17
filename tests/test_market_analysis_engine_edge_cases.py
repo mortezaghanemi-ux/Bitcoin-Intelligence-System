@@ -67,6 +67,36 @@ def build_candles(count=10):
     return pd.DataFrame(rows)
 
 
+def build_recent_candles(count=10):
+    """Build valid candles ending before the current UTC time."""
+
+    data = build_candles(count)
+
+    current_time = pd.Timestamp.now(tz="UTC")
+
+    target_last_close = (
+        current_time - pd.Timedelta(minutes=5)
+    )
+
+    original_last_close = pd.Timestamp(
+        data["close_time"].iloc[-1]
+    )
+
+    shift = target_last_close - original_last_close
+
+    data["open_time"] = (
+        pd.to_datetime(data["open_time"], utc=True)
+        + shift
+    )
+
+    data["close_time"] = (
+        pd.to_datetime(data["close_time"], utc=True)
+        + shift
+    )
+
+    return data
+
+
 def valid_component_result(
     analysis_time,
     data,
@@ -199,8 +229,10 @@ def test_missing_analysis_time_uses_utc_clock(
 ):
     install_mocks(monkeypatch)
 
+    data = build_recent_candles()
+
     result = engine.analyze_market(
-        build_candles(),
+        data,
     )
 
     timestamp = pd.Timestamp(
@@ -209,6 +241,11 @@ def test_missing_analysis_time_uses_utc_clock(
 
     assert timestamp.tzinfo is not None
     assert timestamp.utcoffset() == timedelta(0)
+
+    assert (
+        pd.Timestamp(data["close_time"].iloc[-1])
+        <= timestamp
+    )
 
 
 # ---------------------------------------------------------
