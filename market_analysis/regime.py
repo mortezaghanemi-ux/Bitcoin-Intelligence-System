@@ -93,7 +93,6 @@ def _validate_parameters(
     }
 
     for name, value in integer_parameters.items():
-
         if (
             isinstance(value, bool)
             or not isinstance(value, int)
@@ -111,7 +110,6 @@ def _validate_parameters(
     }
 
     for name, value in numeric_parameters.items():
-
         if (
             isinstance(value, bool)
             or not isinstance(
@@ -254,7 +252,6 @@ def _validate_candles(
         )
 
     for column in ("open_time", "close_time"):
-
         if not isinstance(
             result[column].dtype,
             pd.DatetimeTZDtype,
@@ -421,6 +418,7 @@ def _classify_volatility(
 
     if (
         not np.isfinite(current_atr_percent)
+        or current_atr_percent < 0
         or not np.isfinite(historical_median)
         or historical_median <= 0
     ):
@@ -585,9 +583,12 @@ def analyze_market_regime(
             "Latest closing price must be positive and finite."
         )
 
-    if not np.isfinite(atr_value):
+    if (
+        not np.isfinite(atr_value)
+        or atr_value < 0
+    ):
         raise MarketRegimeError(
-            "Unable to calculate a valid ATR value."
+            "Unable to calculate a valid non-negative ATR value."
         )
 
     atr_percent = (
