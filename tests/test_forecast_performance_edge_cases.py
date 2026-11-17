@@ -409,14 +409,14 @@ def test_very_high_confidence_bucket_with_medium_accuracy_is_detected():
             forecast_id=f"BTC-VHIGH-{index}",
             actual_direction="BULLISH",
             predicted_direction=(
-                "BULLISH" if index < 3 else "BEARISH"
+                "BULLISH" if index < 4 else "BEARISH"
             ),
             confidence_score=90.0,
             directional_accuracy=(
-                1.0 if index < 3 else 0.0
+                1.0 if index < 4 else 0.0
             ),
         )
-        for index in range(5)
+        for index in range(7)
     ]
 
     result = analyze_forecast_performance(records)
