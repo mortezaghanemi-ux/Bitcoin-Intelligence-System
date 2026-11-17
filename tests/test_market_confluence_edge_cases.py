@@ -1,4 +1,3 @@
-
 """Edge-case tests for Bitcoin market confluence analysis."""
 
 from copy import deepcopy
