@@ -59,13 +59,11 @@ def make_candles(
             minutes=interval_minutes
         )
 
-        open_price = float(close)
-
         rows.append(
             {
                 "open_time": open_time,
                 "close_time": close_time,
-                "open": open_price,
+                "open": float(close),
                 "high": float(high),
                 "low": float(low),
                 "close": float(close),
@@ -91,17 +89,19 @@ def make_valid_liquidity_data(count=40):
         lows.append(base - 2.0)
         closes.append(base)
 
-    # Create separated, confirmed swing highs.
+    # Create separated swing highs only when indexes exist.
     for index in (6, 14, 22, 30):
-        highs[index] = 120.0
-        lows[index] = 98.0
-        closes[index] = 110.0
+        if index < count:
+            highs[index] = 120.0
+            lows[index] = 98.0
+            closes[index] = 110.0
 
-    # Create separated, confirmed swing lows.
+    # Create separated swing lows only when indexes exist.
     for index in (10, 18, 26, 34):
-        highs[index] = 102.0
-        lows[index] = 80.0
-        closes[index] = 90.0
+        if index < count:
+            highs[index] = 102.0
+            lows[index] = 80.0
+            closes[index] = 90.0
 
     return make_candles(
         highs=highs,
@@ -339,7 +339,6 @@ def test_analysis_rejects_duplicate_close_times():
 
 def test_analysis_rejects_unsorted_candles():
     data = make_valid_liquidity_data()
-
     data = data.iloc[::-1].reset_index(drop=True)
 
     with pytest.raises(LiquidityAnalysisError):
@@ -354,7 +353,6 @@ def test_analysis_rejects_unsorted_candles():
 
 def test_analysis_rejects_invalid_source():
     data = make_valid_liquidity_data()
-
     data.loc[5, "source"] = ""
 
     with pytest.raises(LiquidityAnalysisError):
@@ -369,7 +367,6 @@ def test_analysis_rejects_invalid_source():
 
 def test_analysis_rejects_non_finite_prices():
     data = make_valid_liquidity_data()
-
     data.loc[5, "close"] = np.inf
 
     with pytest.raises(LiquidityAnalysisError):
@@ -384,7 +381,6 @@ def test_analysis_rejects_non_finite_prices():
 
 def test_analysis_rejects_negative_volume():
     data = make_valid_liquidity_data()
-
     data.loc[5, "volume"] = -1
 
     with pytest.raises(LiquidityAnalysisError):
@@ -514,7 +510,6 @@ def test_group_liquidity_levels_separates_highs_and_lows():
     )
 
     assert len(result) == 2
-
     assert {
         pool["type"]
         for pool in result
