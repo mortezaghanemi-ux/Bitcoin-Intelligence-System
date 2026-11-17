@@ -28,9 +28,7 @@ from market_analysis.regime import (
 
 UTC = timezone.utc
 
-START = datetime(
-    2026, 11, 14, 0, 0, tzinfo=UTC
-)
+START = datetime(2026, 11, 14, 0, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------
@@ -66,30 +64,19 @@ def make_candles(
             open_price = previous_close
 
             movement = (
-                8.0
-                if index % 2 == 0
-                else -8.0
+                8.0 if index % 2 == 0 else -8.0
             )
 
             close = previous_close + movement
 
         else:
-            raise ValueError(
-                "Unknown test direction."
-            )
+            raise ValueError("Unknown test direction.")
 
         high = max(open_price, close) + volatility
         low = min(open_price, close) - volatility
 
-        open_time = (
-            START
-            + timedelta(minutes=5 * index)
-        )
-
-        close_time = (
-            open_time
-            + timedelta(minutes=5)
-        )
+        open_time = START + timedelta(minutes=5 * index)
+        close_time = open_time + timedelta(minutes=5)
 
         rows.append(
             {
@@ -112,10 +99,7 @@ def make_candles(
 def get_analysis_time(data):
     """Return UTC time after the final candle."""
 
-    return (
-        data["close_time"].iloc[-1]
-        + timedelta(minutes=5)
-    )
+    return data["close_time"].iloc[-1] + timedelta(minutes=5)
 
 
 def analyze(data, **kwargs):
@@ -123,7 +107,6 @@ def analyze(data, **kwargs):
 
     if "close_time" in data.columns:
         analysis_time = get_analysis_time(data)
-
     else:
         analysis_time = START + timedelta(days=1)
 
@@ -146,24 +129,18 @@ def analyze(data, **kwargs):
 
 def test_analysis_rejects_nat_analysis_time():
 
-    data = make_candles()
-
     with pytest.raises(MarketRegimeError):
-
         analyze(
-            data,
+            make_candles(),
             analysis_time=pd.NaT,
         )
 
 
 def test_analysis_rejects_none_like_invalid_timestamp():
 
-    data = make_candles()
-
     with pytest.raises(MarketRegimeError):
-
         analyze(
-            data,
+            make_candles(),
             analysis_time=float("nan"),
         )
 
@@ -172,13 +149,11 @@ def test_analysis_rejects_naive_timestamp():
 
     data = make_candles()
 
-    analysis_time = (
-        get_analysis_time(data)
-        .replace(tzinfo=None)
+    analysis_time = get_analysis_time(data).replace(
+        tzinfo=None
     )
 
     with pytest.raises(MarketRegimeError):
-
         analyze(
             data,
             analysis_time=analysis_time,
@@ -189,17 +164,13 @@ def test_analysis_rejects_non_utc_timestamp():
 
     data = make_candles()
 
-    non_utc = timezone(
-        timedelta(hours=3)
-    )
+    non_utc = timezone(timedelta(hours=3))
 
-    analysis_time = (
-        get_analysis_time(data)
-        .astimezone(non_utc)
+    analysis_time = get_analysis_time(data).astimezone(
+        non_utc
     )
 
     with pytest.raises(MarketRegimeError):
-
         analyze(
             data,
             analysis_time=analysis_time,
@@ -228,7 +199,6 @@ def test_analysis_rejects_time_before_last_close():
     )
 
     with pytest.raises(MarketRegimeError):
-
         analyze(
             data,
             analysis_time=analysis_time,
@@ -243,28 +213,20 @@ def test_analysis_rejects_time_before_last_close():
 def test_analysis_rejects_empty_dataframe():
 
     with pytest.raises(MarketRegimeError):
-
-        analyze(
-            pd.DataFrame()
-        )
+        analyze(pd.DataFrame())
 
 
 def test_analysis_rejects_insufficient_candles():
 
-    data = make_candles(
-        candle_count=30
-    )
+    data = make_candles(candle_count=30)
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
 def test_analysis_accepts_exact_minimum_candle_count():
 
-    data = make_candles(
-        candle_count=64
-    )
+    data = make_candles(candle_count=64)
 
     result = analyze(data)
 
@@ -274,9 +236,7 @@ def test_analysis_accepts_exact_minimum_candle_count():
 
 def test_analysis_reports_correct_candle_count():
 
-    data = make_candles(
-        candle_count=80
-    )
+    data = make_candles(candle_count=80)
 
     result = analyze(data)
 
@@ -313,12 +273,9 @@ def test_invalid_integer_parameters_are_rejected(
     value,
 ):
 
-    data = make_candles()
-
     with pytest.raises(MarketRegimeError):
-
         analyze(
-            data,
+            make_candles(),
             **{parameter: value},
         )
 
@@ -349,24 +306,18 @@ def test_invalid_numeric_parameters_are_rejected(
     value,
 ):
 
-    data = make_candles()
-
     with pytest.raises(MarketRegimeError):
-
         analyze(
-            data,
+            make_candles(),
             **{parameter: value},
         )
 
 
 def test_minimum_candles_must_cover_indicator_warmup():
 
-    data = make_candles()
-
     with pytest.raises(MarketRegimeError):
-
         analyze(
-            data,
+            make_candles(),
             adx_period=30,
             atr_period=20,
             volatility_lookback=50,
@@ -376,10 +327,8 @@ def test_minimum_candles_must_cover_indicator_warmup():
 
 def test_zero_ranging_threshold_is_valid():
 
-    data = make_candles()
-
     result = analyze(
-        data,
+        make_candles(),
         ranging_threshold=0,
     )
 
@@ -413,10 +362,7 @@ def test_volatility_classification_boundaries(
     )
 
     assert condition == expected
-
-    assert ratio == pytest.approx(
-        current / median
-    )
+    assert ratio == pytest.approx(current / median)
 
 
 @pytest.mark.parametrize(
@@ -425,6 +371,7 @@ def test_volatility_classification_boundaries(
         (float("nan"), 1.0),
         (float("inf"), 1.0),
         (-float("inf"), 1.0),
+        (-1.0, 1.0),
         (1.0, float("nan")),
         (1.0, float("inf")),
         (1.0, -float("inf")),
@@ -438,7 +385,6 @@ def test_volatility_classification_rejects_invalid_values(
 ):
 
     with pytest.raises(MarketRegimeError):
-
         _classify_volatility(
             current,
             median,
@@ -484,6 +430,19 @@ def test_volatility_classification_at_low_boundary():
 
     assert condition == LOW_VOLATILITY
     assert ratio == pytest.approx(0.7)
+
+
+def test_zero_current_atr_does_not_raise_error():
+
+    condition, ratio = _classify_volatility(
+        current_atr_percent=0.0,
+        historical_median=2.0,
+        high_ratio=1.5,
+        low_ratio=0.7,
+    )
+
+    assert condition == LOW_VOLATILITY
+    assert ratio == 0.0
 
 
 # ---------------------------------------------------------------------
@@ -576,12 +535,8 @@ def test_direction_classification_boundaries(
 
 def test_atr_returns_finite_value_for_flat_market():
 
-    data = make_candles(
-        direction="flat"
-    )
-
     result = _calculate_atr(
-        data,
+        make_candles(direction="flat"),
         period=14,
     )
 
@@ -604,8 +559,21 @@ def test_atr_returns_series_with_original_length():
 
 def test_atr_is_not_negative():
 
+    result = _calculate_atr(
+        make_candles(direction="volatile"),
+        period=14,
+    )
+
+    valid_values = result.dropna()
+
+    assert (valid_values >= 0).all()
+
+
+def test_atr_is_zero_for_zero_range_market():
+
     data = make_candles(
-        direction="volatile"
+        direction="flat",
+        volatility=0.0,
     )
 
     result = _calculate_atr(
@@ -613,9 +581,7 @@ def test_atr_is_not_negative():
         period=14,
     )
 
-    valid_values = result.dropna()
-
-    assert (valid_values >= 0).all()
+    assert result.iloc[-1] == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------
@@ -625,9 +591,7 @@ def test_atr_is_not_negative():
 
 def test_adx_handles_flat_market():
 
-    data = make_candles(
-        direction="flat"
-    )
+    data = make_candles(direction="flat")
 
     adx, positive_di, negative_di = _calculate_adx(
         data,
@@ -643,9 +607,7 @@ def test_adx_handles_flat_market():
 
 def test_adx_values_are_within_valid_range():
 
-    data = make_candles(
-        direction="bullish"
-    )
+    data = make_candles(direction="bullish")
 
     adx, positive_di, negative_di = _calculate_adx(
         data,
@@ -659,10 +621,8 @@ def test_adx_values_are_within_valid_range():
 
 def test_adx_returns_three_series():
 
-    data = make_candles()
-
     results = _calculate_adx(
-        data,
+        make_candles(),
         period=14,
     )
 
@@ -681,12 +641,8 @@ def test_adx_returns_three_series():
 
 def test_bollinger_width_handles_constant_prices():
 
-    close = pd.Series(
-        [100.0] * 30
-    )
-
     result = _calculate_bollinger_width(
-        close,
+        pd.Series([100.0] * 30),
         period=20,
     )
 
@@ -695,18 +651,12 @@ def test_bollinger_width_handles_constant_prices():
 
 def test_bollinger_width_handles_zero_middle_value():
 
-    close = pd.Series(
-        [0.0] * 30
-    )
-
     result = _calculate_bollinger_width(
-        close,
+        pd.Series([0.0] * 30),
         period=20,
     )
 
-    assert np.isnan(
-        result.iloc[-1]
-    )
+    assert np.isnan(result.iloc[-1])
 
 
 def test_bollinger_width_returns_series():
@@ -732,7 +682,6 @@ def test_bollinger_width_returns_series():
 def test_zero_volume_market_is_handled():
 
     data = make_candles()
-
     data["volume"] = 0.0
 
     result = analyze(data)
@@ -746,16 +695,15 @@ def test_zero_volume_market_is_handled():
 def test_positive_current_volume_with_zero_previous_volume():
 
     data = make_candles()
-
     data["volume"] = 0.0
     data.loc[data.index[-1], "volume"] = 10.0
 
     result = analyze(data)
 
     assert result["status"] == "SUCCESS"
-
     assert result["volume"]["current"] == 10.0
     assert result["volume"]["average"] > 0
+
     assert np.isfinite(
         result["volume"]["relative_volume"]
     )
@@ -764,11 +712,9 @@ def test_positive_current_volume_with_zero_previous_volume():
 def test_negative_volume_is_rejected():
 
     data = make_candles()
-
     data.loc[10, "volume"] = -1.0
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
@@ -781,12 +727,9 @@ def test_analysis_rejects_duplicate_open_times():
 
     data = make_candles()
 
-    data.loc[10, "open_time"] = (
-        data.loc[9, "open_time"]
-    )
+    data.loc[10, "open_time"] = data.loc[9, "open_time"]
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
@@ -799,53 +742,42 @@ def test_analysis_rejects_unsorted_candles():
     )
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
 def test_analysis_rejects_invalid_ohlc():
 
     data = make_candles()
-
-    data.loc[10, "high"] = (
-        data.loc[10, "low"] - 10
-    )
+    data.loc[10, "high"] = data.loc[10, "low"] - 10
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
 def test_analysis_rejects_nan_close():
 
     data = make_candles()
-
     data.loc[10, "close"] = np.nan
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
 def test_analysis_rejects_infinite_close():
 
     data = make_candles()
-
     data.loc[10, "close"] = np.inf
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
 def test_analysis_rejects_empty_source():
 
     data = make_candles()
-
     data.loc[10, "source"] = ""
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
@@ -856,7 +788,6 @@ def test_analysis_rejects_missing_required_column():
     )
 
     with pytest.raises(MarketRegimeError):
-
         analyze(data)
 
 
@@ -867,9 +798,7 @@ def test_analysis_rejects_missing_required_column():
 
 def test_analysis_result_contains_required_fields():
 
-    result = analyze(
-        make_candles()
-    )
+    result = analyze(make_candles())
 
     expected = {
         "analysis_timestamp",
@@ -887,16 +816,12 @@ def test_analysis_result_contains_required_fields():
         "parameters",
     }
 
-    assert expected.issubset(
-        result.keys()
-    )
+    assert expected.issubset(result.keys())
 
 
 def test_analysis_result_contains_no_nan_values():
 
-    result = analyze(
-        make_candles()
-    )
+    result = analyze(make_candles())
 
     def check_values(value):
 
@@ -919,9 +844,7 @@ def test_analysis_result_contains_no_nan_values():
 
 def test_analysis_is_deterministic():
 
-    data = make_candles(
-        direction="bullish"
-    )
+    data = make_candles(direction="bullish")
 
     first = analyze(data)
     second = analyze(data)
@@ -931,10 +854,7 @@ def test_analysis_is_deterministic():
 
 def test_analysis_does_not_modify_input_data():
 
-    data = make_candles(
-        direction="bullish"
-    )
-
+    data = make_candles(direction="bullish")
     original = data.copy(deep=True)
 
     analyze(data)
@@ -966,9 +886,7 @@ def test_analysis_reports_all_sources():
 
 def test_analysis_does_not_generate_trading_signals():
 
-    result = analyze(
-        make_candles()
-    )
+    result = analyze(make_candles())
 
     forbidden_keys = {
         "signal",
@@ -979,18 +897,13 @@ def test_analysis_does_not_generate_trading_signals():
         "trade",
     }
 
-    assert forbidden_keys.isdisjoint(
-        result.keys()
-    )
+    assert forbidden_keys.isdisjoint(result.keys())
 
 
 def test_analysis_does_not_enable_auto_trading():
 
-    result = analyze(
-        make_candles()
-    )
+    result = analyze(make_candles())
 
     assert result["status"] == "SUCCESS"
-
     assert "order" not in result
     assert "trade" not in result
