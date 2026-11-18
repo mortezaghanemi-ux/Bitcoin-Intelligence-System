@@ -453,6 +453,93 @@ class TradingPipeline:
 
         return selected
 
+    def _validate_candle_continuity(
+        self,
+        timeframe: str,
+        candles: pd.DataFrame,
+    ) -> None:
+        """Reject misaligned candles and internal timeframe gaps."""
+
+        if candles.empty:
+            raise TradingPipelineError(
+                f"No candles available for continuity validation: {timeframe}."
+            )
+
+        interval_minutes = self.TIMEFRAME_MINUTES[timeframe]
+        interval = pd.Timedelta(minutes=interval_minutes)
+        interval_ns = interval.value
+
+        open_times = self._parse_utc_timestamps(
+            candles["open_time"],
+            timeframe=timeframe,
+            column="open_time",
+        ).reset_index(drop=True)
+
+        close_times = self._parse_utc_timestamps(
+            candles["close_time"],
+            timeframe=timeframe,
+            column="close_time",
+        ).reset_index(drop=True)
+
+        durations = close_times - open_times
+        invalid_duration = durations != interval
+
+        if invalid_duration.any():
+            bad_index = int(
+                invalid_duration[invalid_duration].index[0]
+            )
+
+            raise TradingPipelineError(
+                f"{timeframe} candle at index {bad_index} "
+                "has an invalid open/close duration."
+            )
+
+        misaligned = open_times.map(
+            lambda value: value.value % interval_ns != 0
+        )
+
+        if misaligned.any():
+            bad_index = int(
+                misaligned[misaligned].index[0]
+            )
+
+            raise TradingPipelineError(
+                f"{timeframe} candle at index {bad_index} "
+                "is not aligned to its UTC timeframe boundary."
+            )
+
+        if len(open_times) < 2:
+            return
+
+        differences = open_times.diff().iloc[1:]
+        invalid_steps = differences != interval
+
+        if invalid_steps.any():
+            bad_position = int(
+                invalid_steps[invalid_steps].index[0]
+            )
+
+            actual_step = differences.loc[bad_position]
+            previous_open = open_times.loc[bad_position - 1]
+            current_open = open_times.loc[bad_position]
+
+            if actual_step > interval:
+                missing_count = int(
+                    actual_step / interval
+                ) - 1
+
+                raise TradingPipelineError(
+                    f"{timeframe} candle history contains "
+                    f"{missing_count} missing interval(s) between "
+                    f"{previous_open.isoformat()} and "
+                    f"{current_open.isoformat()}."
+                )
+
+            raise TradingPipelineError(
+                f"{timeframe} candle history contains overlapping "
+                "or out-of-order intervals."
+            )
+
     def _validate_freshness(
         self,
         timeframe: str,
@@ -620,6 +707,11 @@ class TradingPipeline:
             accepted = self._select_single_source(
                 accepted,
                 timeframe,
+            )
+
+            self._validate_candle_continuity(
+                timeframe,
+                accepted,
             )
 
             self._validate_freshness(
