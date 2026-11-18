@@ -13,6 +13,7 @@ from trader.patterns.detector import CandlestickPatternDetector
 from trader.structure.analyzer import MarketStructureAnalyzer
 from trader.timeframe.analyzer import MultiTimeframeAnalyzer
 
+
 SUPPORTED_TIMEFRAMES = ("5m", "15m", "1h", "4h")
 
 REQUIRED_COLUMNS = (
@@ -427,16 +428,16 @@ def _calculate_atr(
 def _build_signal_identity(
     data: dict[str, pd.DataFrame],
     *,
-    account_equity: float | None,
-    leverage: float,
-    minimum_candles: int,
-    minimum_confidence: float,
-    minimum_risk_reward: float,
-    maximum_leverage: float,
-    swing_window: int,
-    risk_fraction: float,
-    maintenance_margin_rate: float,
-    execution_timeframe: str,
+    account_equity: float | None = None,
+    leverage: float = 1.0,
+    minimum_candles: int = 30,
+    minimum_confidence: float = 60.0,
+    minimum_risk_reward: float = 1.5,
+    maximum_leverage: float = 2.0,
+    swing_window: int = 3,
+    risk_fraction: float = 0.005,
+    maintenance_margin_rate: float = 0.005,
+    execution_timeframe: str = "5m",
 ) -> str:
     identity: dict[str, list[dict[str, Any]]] = {}
 
@@ -473,7 +474,9 @@ def _build_signal_identity(
             "maximum_leverage": float(maximum_leverage),
             "swing_window": swing_window,
             "risk_fraction": float(risk_fraction),
-            "maintenance_margin_rate": float(maintenance_margin_rate),
+            "maintenance_margin_rate": float(
+                maintenance_margin_rate
+            ),
             "execution_timeframe": execution_timeframe,
         },
     }
@@ -708,7 +711,6 @@ def _build_risk_levels(
     atr: float,
     minimum_risk_reward: float,
 ) -> dict[str, Any]:
-
     current_price = float(candles["close"].iloc[-1])
     recent = candles.tail(min(14, len(candles)))
 
@@ -838,7 +840,6 @@ def _calculate_position_risk(
     leverage: float,
     maintenance_margin_rate: float,
 ) -> dict[str, Any]:
-
     if account_equity is not None:
         if (
             isinstance(account_equity, bool)
@@ -948,7 +949,6 @@ class TradingSignalEngine:
         maintenance_margin_rate: float = 0.005,
         execution_timeframe: str = "5m",
     ) -> None:
-
         _validate_parameters(
             minimum_candles,
             minimum_confidence,
@@ -992,7 +992,6 @@ class TradingSignalEngine:
         self,
         result: dict[str, Any],
     ) -> dict[str, Any]:
-
         signal_id = result["signal_id"]
 
         if signal_id not in self._known_ids:
@@ -1019,7 +1018,6 @@ class TradingSignalEngine:
         account_equity: float | None = None,
         leverage: float = 1.0,
     ) -> dict[str, Any]:
-
         timestamp = _normalize_utc(analysis_time)
 
         if (
@@ -1188,10 +1186,15 @@ class TradingSignalEngine:
             pattern_results
         )
 
+        volume_report = timeframe_reports[
+            self.execution_timeframe
+        ].get("volume", {})
+
+        if not isinstance(volume_report, dict):
+            volume_report = {}
+
         volume_direction = _direction(
-            timeframe_reports[self.execution_timeframe]
-            .get("volume", {})
-            .get("direction")
+            volume_report.get("direction")
         )
 
         confidence, reasons = _calculate_confidence(
@@ -1403,7 +1406,6 @@ def generate_trading_signal(
     maintenance_margin_rate: float = 0.005,
     execution_timeframe: str = "5m",
 ) -> dict[str, Any]:
-
     engine = TradingSignalEngine(
         minimum_candles=minimum_candles,
         minimum_confidence=minimum_confidence,
