@@ -699,7 +699,10 @@ def _select_pattern_direction(
     if bearish_votes > bullish_votes:
         return "BEARISH"
 
-    return "NEUTRAL"def _build_risk_levels(
+    return "NEUTRAL"
+
+
+def _build_risk_levels(
     direction: str,
     candles: pd.DataFrame,
     atr: float,
