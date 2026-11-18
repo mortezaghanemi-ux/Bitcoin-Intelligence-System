@@ -1,9 +1,3 @@
-"""Bitcoin trading signal generation engine.
-
-Generates LONG, SHORT and NO_TRADE signals for manual review.
-No exchange connection, API keys or order execution are supported.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -18,7 +12,6 @@ from trader.order_blocks.detector import OrderBlockDetector
 from trader.patterns.detector import CandlestickPatternDetector
 from trader.structure.analyzer import MarketStructureAnalyzer
 from trader.timeframe.analyzer import MultiTimeframeAnalyzer
-
 
 SUPPORTED_TIMEFRAMES = ("5m", "15m", "1h", "4h")
 
@@ -37,12 +30,10 @@ DIRECTIONS = ("BULLISH", "BEARISH", "NEUTRAL")
 
 
 class TradingSignalEngineError(RuntimeError):
-    """Raised when trading signal generation fails."""
+    pass
 
 
 def _normalize_utc(value: datetime | None) -> pd.Timestamp:
-    """Validate and normalize an analysis timestamp to UTC."""
-
     if value is None:
         return pd.Timestamp(datetime.now(timezone.utc))
 
@@ -80,8 +71,6 @@ def _validate_parameters(
     risk_fraction: float,
     maintenance_margin_rate: float,
 ) -> None:
-    """Validate engine configuration."""
-
     if (
         isinstance(minimum_candles, bool)
         or not isinstance(minimum_candles, int)
@@ -152,8 +141,6 @@ def _validate_input_data(
     analysis_time: pd.Timestamp,
     minimum_candles: int,
 ) -> dict[str, pd.DataFrame]:
-    """Validate the supplied timeframe collection."""
-
     if not isinstance(data, dict):
         raise TradingSignalEngineError(
             "data must be a dictionary of timeframe DataFrames."
@@ -248,11 +235,10 @@ def _validate_input_data(
             "4h": 14400,
         }[timeframe]
 
+        interval = pd.Timedelta(seconds=interval_seconds)
         durations = copy["close_time"] - copy["open_time"]
 
-        if not durations.eq(
-            pd.Timedelta(seconds=interval_seconds)
-        ).all():
+        if not durations.eq(interval).all():
             raise TradingSignalEngineError(
                 f"{timeframe} contains incorrect candle durations."
             )
@@ -261,6 +247,39 @@ def _validate_input_data(
             raise TradingSignalEngineError(
                 f"{timeframe} contains invalid candle timestamps."
             )
+
+        interval_ns = interval.value
+
+        misaligned = copy["open_time"].map(
+            lambda value: value.value % interval_ns != 0
+        )
+
+        if misaligned.any():
+            bad_index = int(misaligned[misaligned].index[0])
+            raise TradingSignalEngineError(
+                f"{timeframe} candle at index {bad_index} "
+                "is not aligned to its UTC timeframe boundary."
+            )
+
+        if len(copy) > 1:
+            steps = copy["open_time"].diff().iloc[1:]
+            invalid_steps = steps != interval
+
+            if invalid_steps.any():
+                bad_index = int(invalid_steps[invalid_steps].index[0])
+                actual_step = steps.loc[bad_index]
+
+                if actual_step > interval:
+                    missing_count = int(actual_step / interval) - 1
+                    raise TradingSignalEngineError(
+                        f"{timeframe} candle history contains "
+                        f"{missing_count} missing interval(s)."
+                    )
+
+                raise TradingSignalEngineError(
+                    f"{timeframe} candle history contains overlapping "
+                    "or out-of-order intervals."
+                )
 
         if (copy["close_time"] > analysis_time).any():
             raise TradingSignalEngineError(
@@ -347,8 +366,6 @@ def _validate_input_data(
 
 
 def _direction(value: Any) -> str:
-    """Normalize a direction value."""
-
     if not isinstance(value, str):
         return "NEUTRAL"
 
@@ -367,8 +384,6 @@ def _direction(value: Any) -> str:
 
 
 def _safe_float(value: Any) -> float | None:
-    """Convert a value to a finite float."""
-
     try:
         result = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -384,8 +399,6 @@ def _calculate_atr(
     candles: pd.DataFrame,
     period: int = 14,
 ) -> float:
-    """Calculate a simple average true range."""
-
     previous_close = candles["close"].shift(1)
 
     true_range = pd.concat(
@@ -413,9 +426,18 @@ def _calculate_atr(
 
 def _build_signal_identity(
     data: dict[str, pd.DataFrame],
+    *,
+    account_equity: float | None,
+    leverage: float,
+    minimum_candles: int,
+    minimum_confidence: float,
+    minimum_risk_reward: float,
+    maximum_leverage: float,
+    swing_window: int,
+    risk_fraction: float,
+    maintenance_margin_rate: float,
+    execution_timeframe: str,
 ) -> str:
-    """Build a deterministic identity from every validated candle."""
-
     identity: dict[str, list[dict[str, Any]]] = {}
 
     for timeframe in SUPPORTED_TIMEFRAMES:
@@ -436,8 +458,28 @@ def _build_signal_identity(
 
         identity[timeframe] = records
 
+    payload = {
+        "candles": identity,
+        "account_equity": (
+            float(account_equity)
+            if account_equity is not None
+            else None
+        ),
+        "leverage": float(leverage),
+        "engine_parameters": {
+            "minimum_candles": minimum_candles,
+            "minimum_confidence": float(minimum_confidence),
+            "minimum_risk_reward": float(minimum_risk_reward),
+            "maximum_leverage": float(maximum_leverage),
+            "swing_window": swing_window,
+            "risk_fraction": float(risk_fraction),
+            "maintenance_margin_rate": float(maintenance_margin_rate),
+            "execution_timeframe": execution_timeframe,
+        },
+    }
+
     encoded = json.dumps(
-        identity,
+        payload,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
@@ -449,8 +491,6 @@ def _build_signal_identity(
 def _extract_structure_direction(
     structure: dict[str, Any],
 ) -> str:
-    """Read the direction from a structure analysis."""
-
     trend = structure.get("trend", {})
 
     if isinstance(trend, dict):
@@ -468,8 +508,6 @@ def _calculate_confidence(
     volume_direction: str,
     conflict_count: int,
 ) -> tuple[float, list[str]]:
-    """Calculate a transparent rule-based confidence score."""
-
     reasons: list[str] = []
 
     if overall_direction == "NEUTRAL":
@@ -524,10 +562,7 @@ def _calculate_confidence(
         reasons.append(
             f"{conflict_count} timeframe conflicts were detected."
         )
-        score -= min(
-            20.0,
-            conflict_count * 5.0,
-        )
+        score -= min(20.0, conflict_count * 5.0)
 
     confidence = round(
         max(0.0, min(100.0, score)),
@@ -541,8 +576,6 @@ def _select_order_block_direction(
     order_block_results: dict[str, dict[str, Any]],
     current_price: float,
 ) -> str:
-    """Find the nearest active order block relative to current price."""
-
     candidates = []
 
     for timeframe, result in order_block_results.items():
@@ -578,7 +611,6 @@ def _select_order_block_direction(
         return "NEUTRAL"
 
     candidates.sort(key=lambda item: item[0])
-
     nearest_distance = candidates[0][0]
 
     nearest = [
@@ -603,11 +635,6 @@ def _select_order_block_direction(
 def _select_pattern_direction(
     pattern_results: dict[str, pd.DataFrame],
 ) -> str:
-    """
-    Determine pattern direction using only the latest patterns
-    independently selected for each timeframe.
-    """
-
     bullish_votes = 0
     bearish_votes = 0
 
@@ -617,10 +644,7 @@ def _select_pattern_direction(
         if not isinstance(patterns, pd.DataFrame):
             continue
 
-        if patterns.empty:
-            continue
-
-        if "direction" not in patterns.columns:
+        if patterns.empty or "direction" not in patterns.columns:
             continue
 
         if "close_time" in patterns.columns:
@@ -666,7 +690,6 @@ def _select_pattern_direction(
 
         if timeframe_bullish > timeframe_bearish:
             bullish_votes += 1
-
         elif timeframe_bearish > timeframe_bullish:
             bearish_votes += 1
 
@@ -676,19 +699,14 @@ def _select_pattern_direction(
     if bearish_votes > bullish_votes:
         return "BEARISH"
 
-    return "NEUTRAL"
-
-
-def _build_risk_levels(
+    return "NEUTRAL"def _build_risk_levels(
     direction: str,
     candles: pd.DataFrame,
     atr: float,
     minimum_risk_reward: float,
 ) -> dict[str, Any]:
-    """Build entry, stop-loss and take-profit reference levels."""
 
     current_price = float(candles["close"].iloc[-1])
-
     recent = candles.tail(min(14, len(candles)))
 
     buffer = atr * 0.25
@@ -702,7 +720,6 @@ def _build_risk_levels(
         volatility_stop = entry_lower - (atr * 1.5)
 
         stop_loss = min(structural_stop, volatility_stop)
-
         risk = entry_upper - stop_loss
 
         if risk <= 0:
@@ -715,7 +732,9 @@ def _build_risk_levels(
             entry_upper + (
                 risk * max(1.5, minimum_risk_reward)
             ),
-            entry_upper + (risk * 2.0),
+            entry_upper + (
+                risk * max(2.0, minimum_risk_reward + 0.5)
+            ),
         ]
 
     elif direction == "BEARISH":
@@ -726,7 +745,6 @@ def _build_risk_levels(
         volatility_stop = entry_upper + (atr * 1.5)
 
         stop_loss = max(structural_stop, volatility_stop)
-
         risk = stop_loss - entry_lower
 
         if risk <= 0:
@@ -739,7 +757,9 @@ def _build_risk_levels(
             entry_lower - (
                 risk * max(1.5, minimum_risk_reward)
             ),
-            entry_lower - (risk * 2.0),
+            entry_lower - (
+                risk * max(2.0, minimum_risk_reward + 0.5)
+            ),
         ]
 
     else:
@@ -815,7 +835,6 @@ def _calculate_position_risk(
     leverage: float,
     maintenance_margin_rate: float,
 ) -> dict[str, Any]:
-    """Calculate estimated position sizing and liquidation reference."""
 
     if account_equity is not None:
         if (
@@ -914,7 +933,6 @@ def _calculate_position_risk(
 
 
 class TradingSignalEngine:
-    """Generate trading signals for manual review."""
 
     def __init__(
         self,
@@ -959,15 +977,11 @@ class TradingSignalEngine:
 
     @property
     def history(self) -> list[dict[str, Any]]:
-        """Return a defensive copy of all generated and rejected signals."""
-
         return json.loads(
             json.dumps(self._history)
         )
 
     def clear_history(self) -> None:
-        """Clear in-memory signal history."""
-
         self._history.clear()
         self._known_ids.clear()
 
@@ -975,7 +989,6 @@ class TradingSignalEngine:
         self,
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        """Preserve a signal once without modifying historical records."""
 
         signal_id = result["signal_id"]
 
@@ -1003,7 +1016,6 @@ class TradingSignalEngine:
         account_equity: float | None = None,
         leverage: float = 1.0,
     ) -> dict[str, Any]:
-        """Generate one signal from four validated timeframe datasets."""
 
         timestamp = _normalize_utc(analysis_time)
 
@@ -1023,8 +1035,28 @@ class TradingSignalEngine:
             self.minimum_candles,
         )
 
+        if account_equity is not None and (
+            isinstance(account_equity, bool)
+            or not isinstance(account_equity, (int, float))
+            or not math.isfinite(account_equity)
+            or account_equity <= 0
+        ):
+            raise TradingSignalEngineError(
+                "account_equity must be a finite positive number."
+            )
+
         identity = _build_signal_identity(
-            candles_by_timeframe
+            candles_by_timeframe,
+            account_equity=account_equity,
+            leverage=float(leverage),
+            minimum_candles=self.minimum_candles,
+            minimum_confidence=self.minimum_confidence,
+            minimum_risk_reward=self.minimum_risk_reward,
+            maximum_leverage=self.maximum_leverage,
+            swing_window=self.swing_window,
+            risk_fraction=self.risk_fraction,
+            maintenance_margin_rate=self.maintenance_margin_rate,
+            execution_timeframe=self.execution_timeframe,
         )
 
         signal_id = hashlib.sha256(
@@ -1093,15 +1125,52 @@ class TradingSignalEngine:
             multi_timeframe["overall_direction"]
         )
 
-        alignment = multi_timeframe["alignment"]
+        alignment = multi_timeframe.get("alignment")
 
-        alignment_ratio = float(
-            alignment.get("alignment_ratio", 0.0)
+        if not isinstance(alignment, dict):
+            raise TradingSignalEngineError(
+                "Multi-timeframe analyzer returned an invalid alignment report."
+            )
+
+        alignment_ratio = _safe_float(
+            alignment.get("alignment_ratio")
         )
 
-        conflict_count = int(
-            alignment.get("conflict_count", 0)
-        )
+        conflict_value = alignment.get("conflict_count")
+
+        if alignment_ratio is None or not 0.0 <= alignment_ratio <= 1.0:
+            raise TradingSignalEngineError(
+                "Multi-timeframe alignment_ratio must be between 0 and 1."
+            )
+
+        if (
+            isinstance(conflict_value, bool)
+            or not isinstance(conflict_value, int)
+            or not 0 <= conflict_value <= len(SUPPORTED_TIMEFRAMES)
+        ):
+            raise TradingSignalEngineError(
+                "Multi-timeframe conflict_count is invalid."
+            )
+
+        conflict_count = conflict_value
+
+        timeframe_reports = multi_timeframe.get("timeframes")
+
+        if not isinstance(timeframe_reports, dict) or any(
+            timeframe not in timeframe_reports
+            or not isinstance(timeframe_reports[timeframe], dict)
+            for timeframe in SUPPORTED_TIMEFRAMES
+        ):
+            raise TradingSignalEngineError(
+                "Multi-timeframe analyzer returned incomplete timeframe reports."
+            )
+
+        alignment_directions = alignment.get("directions", {})
+
+        if not isinstance(alignment_directions, dict):
+            raise TradingSignalEngineError(
+                "Multi-timeframe directions report must be a dictionary."
+            )
 
         structure_direction = _extract_structure_direction(
             structure_results[self.execution_timeframe]
@@ -1117,9 +1186,9 @@ class TradingSignalEngine:
         )
 
         volume_direction = _direction(
-            multi_timeframe["timeframes"][
-                self.execution_timeframe
-            ]["volume"]["direction"]
+            timeframe_reports[self.execution_timeframe]
+            .get("volume", {})
+            .get("direction")
         )
 
         confidence, reasons = _calculate_confidence(
@@ -1225,7 +1294,7 @@ class TradingSignalEngine:
                 "ratio": alignment_ratio,
                 "status": alignment.get("status"),
                 "conflict_count": conflict_count,
-                "timeframe_directions": alignment.get("directions", {}),
+                "timeframe_directions": alignment_directions,
             },
             "supporting_analysis": {
                 "market_structure_direction": structure_direction,
@@ -1331,7 +1400,6 @@ def generate_trading_signal(
     maintenance_margin_rate: float = 0.005,
     execution_timeframe: str = "5m",
 ) -> dict[str, Any]:
-    """Generate a one-time trading signal."""
 
     engine = TradingSignalEngine(
         minimum_candles=minimum_candles,
