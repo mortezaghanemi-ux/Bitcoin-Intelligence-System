@@ -1,7 +1,8 @@
 """Tests for the FRED economic data collector."""
 
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
@@ -128,6 +129,13 @@ def collect(
     series_ids=None,
     **kwargs,
 ):
+    """Call the collector with safe test defaults."""
+
+    collection_time = kwargs.pop(
+        "collection_time",
+        COLLECTION_TIME,
+    )
+
     return collect_fred_observations(
         series_ids=(
             ["DGS10"]
@@ -136,14 +144,14 @@ def collect(
         ),
         output_dir=output_dir,
         api_key=API_KEY,
-        collection_time=COLLECTION_TIME,
+        collection_time=collection_time,
         **kwargs,
     )
 
 
-# --------------------------------------------------
+# ==================================================
 # Successful collection
-# --------------------------------------------------
+# ==================================================
 
 def test_collects_valid_observation(
     monkeypatch,
@@ -235,7 +243,6 @@ def test_request_contains_required_parameters(
     )
 
     call = session.calls[0]
-
     params = call["kwargs"]["params"]
 
     assert call["url"] == fred.API_URL
@@ -292,9 +299,9 @@ def test_request_uses_json_accept_header(
     }
 
 
-# --------------------------------------------------
+# ==================================================
 # Pagination
-# --------------------------------------------------
+# ==================================================
 
 def test_fetches_multiple_pages(
     monkeypatch,
@@ -447,9 +454,9 @@ def test_empty_page_before_expected_count_is_rejected(
         )
 
 
-# --------------------------------------------------
+# ==================================================
 # Missing and numeric values
-# --------------------------------------------------
+# ==================================================
 
 def test_missing_value_is_preserved_as_null(
     monkeypatch,
@@ -461,9 +468,7 @@ def test_missing_value_is_preserved_as_null(
             FakeResponse(
                 api_payload(
                     [
-                        observation(
-                            value="."
-                        )
+                        observation(value=".")
                     ]
                 )
             )
@@ -497,9 +502,7 @@ def test_invalid_numeric_values_are_rejected(
             FakeResponse(
                 api_payload(
                     [
-                        observation(
-                            value=invalid_value
-                        )
+                        observation(value=invalid_value)
                     ]
                 )
             )
@@ -510,9 +513,9 @@ def test_invalid_numeric_values_are_rejected(
         collect(tmp_path)
 
 
-# --------------------------------------------------
+# ==================================================
 # Observation validation
-# --------------------------------------------------
+# ==================================================
 
 @pytest.mark.parametrize(
     "invalid_date",
@@ -534,9 +537,7 @@ def test_invalid_observation_date_is_rejected(
             FakeResponse(
                 api_payload(
                     [
-                        observation(
-                            date=invalid_date
-                        )
+                        observation(date=invalid_date)
                     ]
                 )
             )
@@ -615,9 +616,9 @@ def test_missing_observation_value_is_rejected(
         collect(tmp_path)
 
 
-# --------------------------------------------------
+# ==================================================
 # Duplicate prevention and revisions
-# --------------------------------------------------
+# ==================================================
 
 def test_duplicate_observations_are_not_written_twice(
     monkeypatch,
@@ -761,9 +762,9 @@ def test_invalid_existing_jsonl_is_rejected(
         collect(tmp_path)
 
 
-# --------------------------------------------------
+# ==================================================
 # API response errors
-# --------------------------------------------------
+# ==================================================
 
 def test_http_error_is_translated(
     monkeypatch,
@@ -892,9 +893,9 @@ def test_more_records_than_page_size_is_rejected(
         )
 
 
-# --------------------------------------------------
+# ==================================================
 # Input validation
-# --------------------------------------------------
+# ==================================================
 
 def test_api_key_is_required(
     monkeypatch,
@@ -1076,8 +1077,6 @@ def test_naive_collection_time_is_rejected(
 def test_non_utc_collection_time_is_rejected(
     tmp_path,
 ):
-    from datetime import timedelta
-
     non_utc = datetime(
         2026,
         11,
@@ -1099,9 +1098,9 @@ def test_non_utc_collection_time_is_rejected(
         )
 
 
-# --------------------------------------------------
+# ==================================================
 # Storage and security
-# --------------------------------------------------
+# ==================================================
 
 def test_output_file_is_append_only(
     monkeypatch,
