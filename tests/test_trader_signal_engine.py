@@ -916,11 +916,43 @@ def test_generates_bearish_signal(monkeypatch):
     result = TradingSignalEngine().generate(
         make_market_data(),
         analysis_time=CHECK_TIME,
+        account_equity=10000,
+        leverage=2,
     )
 
     assert result["signal"] == "SHORT"
     assert result["direction"] == "BEARISH"
     assert result["status"] == "REQUIRES_MANUAL_REVIEW"
+
+    assert result["entry_range"] is not None
+    assert result["stop_loss"] > 0
+    assert len(result["take_profit"]) == 3
+
+    assert result["risk_calculation"] is not None
+    assert result["risk_calculation"]["position"]["status"] == "CALCULATED"
+
+
+def test_bearish_signal_without_equity_is_rejected(monkeypatch):
+    install_mock_analyzers(
+        monkeypatch,
+        direction="BEARISH",
+        structure_direction="BEARISH",
+        volume_direction="BEARISH",
+    )
+
+    result = TradingSignalEngine().generate(
+        make_market_data(),
+        analysis_time=CHECK_TIME,
+    )
+
+    assert result["signal"] == "NO_TRADE"
+    assert result["direction"] == "BEARISH"
+    assert result["status"] == "REJECTED"
+
+    assert result["entry_range"] is None
+    assert result["stop_loss"] is None
+    assert result["risk_calculation"] is None
+    assert result["rejection_reasons"]
 
 
 def test_neutral_direction_produces_no_trade(monkeypatch):
