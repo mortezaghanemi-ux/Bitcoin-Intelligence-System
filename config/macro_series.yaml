@@ -1,0 +1,51 @@
+macro_series:
+  enabled: true
+  provider: fred
+  timezone: UTC
+
+  series:
+
+    - id: DGS10
+      name: treasury_10_year_yield
+      description: US 10-Year Treasury Yield
+      enabled: true
+
+    - id: FEDFUNDS
+      name: federal_funds_rate
+      description: Federal Funds Effective Rate
+      enabled: true
+
+    - id: CPIAUCSL
+      name: consumer_price_index
+      description: US Consumer Price Index
+      enabled: true
+
+    - id: UNRATE
+      name: unemployment_rate
+      description: US Unemployment Rate
+      enabled: true
+
+    - id: WALCL
+      name: federal_reserve_balance_sheet
+      description: Federal Reserve Total Assets
+      enabled: true
+
+    - id: DTWEXBGS
+      name: trade_weighted_us_dollar_index
+      description: Trade Weighted US Dollar Index
+      enabled: true
+
+  collection:
+    observation_start: null
+    observation_end: null
+    preserve_revisions: true
+    preserve_missing_values: true
+    prevent_duplicates: true
+    append_only: true
+
+  validation:
+    require_series_id: true
+    require_observation_date: true
+    require_utc_collection_time: true
+    reject_non_finite_values: true
+    missing_value_policy: preserve_as_null
