@@ -119,14 +119,24 @@ def _validate_positive_number(
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value <= 0
     ):
         raise ValueError(
             f"{name} must be a positive finite number."
         )
 
-    return float(value)
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"{name} must be a positive finite number."
+        ) from exc
+
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError(
+            f"{name} must be a positive finite number."
+        )
+
+    return normalized
 
 
 def _resolve_paths(
@@ -251,10 +261,16 @@ def _load_runtime_configuration() -> dict[str, Any]:
 
     grace_minutes = limits.get("candles")
 
-    grace_minutes = _validate_positive_number(
-        grace_minutes,
-        name="data_quality.freshness.max_age_minutes.candles",
-    )
+    try:
+        grace_minutes = _validate_positive_number(
+            grace_minutes,
+            name="data_quality.freshness.max_age_minutes.candles",
+        )
+
+    except ValueError as exc:
+        raise TradingRuntimeError(
+            f"Invalid candle freshness limit: {exc}"
+        ) from exc
 
     return {
         "trader": trader,
