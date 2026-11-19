@@ -54,6 +54,7 @@ def _normalize_utc(
 
     try:
         offset = value.utcoffset()
+
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(
             "Invalid collection_time timezone."
@@ -176,6 +177,7 @@ def _load_existing_keys(
                     )
 
                 metric = record.get("metric")
+
                 timestamp = record.get(
                     "provider_timestamp"
                 )
@@ -194,8 +196,8 @@ def _load_existing_keys(
 
     except OSError as exc:
         raise CoinGeckoCollectorError(
-            f"Cannot read existing history: {exc}"
-        ) from exc
+            "Cannot read existing CoinGecko history."
+        ) from None
 
     return existing
 
@@ -258,10 +260,10 @@ def _parse_series(
             ValueError,
             OverflowError,
             OSError,
-        ) as exc:
+        ):
             raise CoinGeckoCollectorError(
                 f"Timestamp out of range in {metric_name}."
-            ) from exc
+            ) from None
 
         if observed_at > collection_time:
             raise CoinGeckoCollectorError(
@@ -350,6 +352,9 @@ def collect_coingecko_market_chart(
             credential.strip()
         )
 
+    # Never expose request exception details.
+    # HTTP libraries may include sensitive headers
+    # or API credentials in exception messages.
     try:
         response = requests.get(
             API_URL,
@@ -365,15 +370,15 @@ def collect_coingecko_market_chart(
 
         payload = response.json()
 
-    except requests.RequestException as exc:
+    except requests.RequestException:
         raise CoinGeckoCollectorError(
-            f"CoinGecko request failed: {exc}"
-        ) from exc
+            "CoinGecko request failed."
+        ) from None
 
-    except ValueError as exc:
+    except ValueError:
         raise CoinGeckoCollectorError(
             "CoinGecko returned invalid JSON."
-        ) from exc
+        ) from None
 
     if not isinstance(payload, dict):
         raise CoinGeckoCollectorError(
@@ -452,9 +457,9 @@ def collect_coingecko_market_chart(
 
             file.flush()
 
-    except OSError as exc:
+    except OSError:
         raise CoinGeckoCollectorError(
-            f"Cannot save CoinGecko raw data: {exc}"
-        ) from exc
+            "Cannot save CoinGecko raw data."
+        ) from None
 
     return all_records
