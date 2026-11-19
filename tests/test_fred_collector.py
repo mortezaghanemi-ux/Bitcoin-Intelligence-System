@@ -1,4 +1,3 @@
-
 """Tests for the FRED economic data collector."""
 
 import json
