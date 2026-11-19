@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,8 @@ DEFAULT_OUTPUT_DIR = (
 )
 
 DEFAULT_TIMEOUT = 15.0
+
+MAX_PROVIDER_AGE_MINUTES = 15
 
 NUMERIC_FIELDS = (
     "markPrice",
@@ -73,10 +75,10 @@ def _normalize_utc(
         TypeError,
         ValueError,
         OverflowError,
-    ) as exc:
+    ):
         raise ValueError(
             "Invalid collection_time timezone."
-        ) from exc
+        ) from None
 
     if (
         offset is None
@@ -161,20 +163,26 @@ def _parse_provider_time(
 ) -> datetime:
     """Parse the provider's ISO-8601 timestamp."""
 
-    if not isinstance(value, str) or not value.strip():
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+    ):
         raise KrakenFuturesCollectorError(
             "Ticker is missing lastTime."
         )
 
     try:
         parsed = datetime.fromisoformat(
-            value.strip().replace("Z", "+00:00")
+            value.strip().replace(
+                "Z",
+                "+00:00",
+            )
         )
 
-    except ValueError as exc:
+    except ValueError:
         raise KrakenFuturesCollectorError(
             "Invalid ticker lastTime timestamp."
-        ) from exc
+        ) from None
 
     if parsed.tzinfo is None:
         raise KrakenFuturesCollectorError(
@@ -223,6 +231,8 @@ def _load_existing_keys(
     if not path.exists():
         return existing
 
+    read_failed = False
+
     try:
         with path.open(
             "r",
@@ -237,13 +247,19 @@ def _load_existing_keys(
                 if not line.strip():
                     continue
 
+                invalid_json = False
+                record = None
+
                 try:
                     record = json.loads(line)
 
-                except json.JSONDecodeError as exc:
+                except json.JSONDecodeError:
+                    invalid_json = True
+
+                if invalid_json:
                     raise KrakenFuturesCollectorError(
                         f"Invalid JSONL at line {line_number}."
-                    ) from exc
+                    )
 
                 if not isinstance(record, dict):
                     raise KrakenFuturesCollectorError(
@@ -251,6 +267,7 @@ def _load_existing_keys(
                     )
 
                 symbol = record.get("symbol")
+
                 timestamp = record.get(
                     "provider_timestamp"
                 )
@@ -267,10 +284,13 @@ def _load_existing_keys(
                     (symbol, timestamp)
                 )
 
-    except OSError as exc:
+    except OSError:
+        read_failed = True
+
+    if read_failed:
         raise KrakenFuturesCollectorError(
-            f"Cannot read existing futures history: {exc}"
-        ) from exc
+            "Cannot read existing futures history."
+        )
 
     return existing
 
@@ -282,6 +302,7 @@ def _parse_ticker(
     """Validate and normalize one Bitcoin futures ticker."""
 
     symbol = ticker.get("symbol")
+
     pair = ticker.get("pair")
 
     if (
@@ -309,11 +330,21 @@ def _parse_ticker(
             "Ticker timestamp is in the future."
         )
 
+    maximum_age = timedelta(
+        minutes=MAX_PROVIDER_AGE_MINUTES
+    )
+
+    if collection_time - provider_time > maximum_age:
+        raise KrakenFuturesCollectorError(
+            "Ticker data is stale."
+        )
+
     numeric_values = _validate_numeric_fields(
         ticker
     )
 
     mark_price = numeric_values["markPrice"]
+
     last_price = numeric_values["last"]
 
     if (
@@ -333,6 +364,7 @@ def _parse_ticker(
         )
 
     bid = numeric_values["bid"]
+
     ask = numeric_values["ask"]
 
     if (
@@ -344,7 +376,10 @@ def _parse_ticker(
             "Ticker bid price cannot exceed ask price."
         )
 
-    suspended = ticker.get("suspended", False)
+    suspended = ticker.get(
+        "suspended",
+        False,
+    )
 
     if not isinstance(suspended, bool):
         raise KrakenFuturesCollectorError(
@@ -353,7 +388,10 @@ def _parse_ticker(
 
     tag = ticker.get("tag")
 
-    if tag is not None and not isinstance(tag, str):
+    if (
+        tag is not None
+        and not isinstance(tag, str)
+    ):
         raise KrakenFuturesCollectorError(
             "Invalid futures contract tag."
         )
@@ -376,6 +414,55 @@ def _parse_ticker(
     }
 
 
+def _fetch_payload(
+    timeout: float,
+) -> dict[str, Any]:
+    """Fetch the public Kraken Futures API response safely."""
+
+    request_failed = False
+
+    invalid_json = False
+
+    payload = None
+
+    try:
+        response = requests.get(
+            API_URL,
+            headers={
+                "accept": "application/json",
+            },
+            timeout=timeout,
+        )
+
+        response.raise_for_status()
+
+    except requests.RequestException:
+        request_failed = True
+
+    if request_failed:
+        raise KrakenFuturesCollectorError(
+            "Kraken Futures request failed."
+        )
+
+    try:
+        payload = response.json()
+
+    except ValueError:
+        invalid_json = True
+
+    if invalid_json:
+        raise KrakenFuturesCollectorError(
+            "Kraken Futures returned invalid JSON."
+        )
+
+    if not isinstance(payload, dict):
+        raise KrakenFuturesCollectorError(
+            "Kraken Futures response must be a JSON object."
+        )
+
+    return payload
+
+
 def collect_kraken_futures(
     *,
     symbol: str | None = None,
@@ -390,7 +477,10 @@ def collect_kraken_futures(
 
     Only Bitcoin futures instruments are stored.
 
+    Future and stale provider observations are rejected.
+
     Existing raw observations are preserved.
+
     Duplicate symbol/timestamp records are skipped.
     """
 
@@ -408,33 +498,9 @@ def collect_kraken_futures(
         else None
     )
 
-    try:
-        response = requests.get(
-            API_URL,
-            headers={
-                "accept": "application/json",
-            },
-            timeout=request_timeout,
-        )
-
-        response.raise_for_status()
-
-        payload = response.json()
-
-    except requests.RequestException as exc:
-        raise KrakenFuturesCollectorError(
-            f"Kraken Futures request failed: {exc}"
-        ) from exc
-
-    except ValueError as exc:
-        raise KrakenFuturesCollectorError(
-            "Kraken Futures returned invalid JSON."
-        ) from exc
-
-    if not isinstance(payload, dict):
-        raise KrakenFuturesCollectorError(
-            "Kraken Futures response must be a JSON object."
-        )
+    payload = _fetch_payload(
+        request_timeout
+    )
 
     if payload.get("result") not in (
         None,
@@ -507,6 +573,8 @@ def collect_kraken_futures(
     if not records:
         return []
 
+    save_failed = False
+
     try:
         destination.mkdir(
             parents=True,
@@ -531,9 +599,12 @@ def collect_kraken_futures(
 
             file.flush()
 
-    except OSError as exc:
+    except OSError:
+        save_failed = True
+
+    if save_failed:
         raise KrakenFuturesCollectorError(
-            f"Cannot save Kraken Futures data: {exc}"
-        ) from exc
+            "Cannot save Kraken Futures data."
+        )
 
     return records
