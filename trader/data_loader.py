@@ -68,9 +68,7 @@ def _validate_pair(pair: str) -> str:
         or not pair
         or not pair.isalnum()
     ):
-        raise ValueError(
-            "Invalid trading pair."
-        )
+        raise ValueError("Invalid trading pair.")
 
     return pair.upper()
 
@@ -97,11 +95,9 @@ def _validate_data_directory(
 
     if data_dir is None:
         directory = DEFAULT_DATA_DIR
-
     else:
         try:
             directory = Path(data_dir).expanduser()
-
         except (TypeError, ValueError) as exc:
             raise TradingDataLoaderError(
                 "Invalid candle data directory."
@@ -109,7 +105,6 @@ def _validate_data_directory(
 
     try:
         directory = directory.resolve()
-
     except (OSError, RuntimeError) as exc:
         raise TradingDataLoaderError(
             f"Cannot resolve candle data directory: {exc}"
@@ -133,7 +128,6 @@ def _parse_utc_timestamp(
 
     try:
         timestamp = pd.Timestamp(value)
-
     except (TypeError, ValueError, OverflowError) as exc:
         raise TradingDataLoaderError(
             f"Invalid {field} at JSONL line {line_number}."
@@ -152,7 +146,6 @@ def _parse_utc_timestamp(
 
     try:
         offset = timestamp.utcoffset()
-
     except (TypeError, ValueError, OverflowError) as exc:
         raise TradingDataLoaderError(
             f"Invalid timezone in {field} "
@@ -195,7 +188,10 @@ def _validate_record(
             + ", ".join(missing)
         )
 
-    if record["schema_version"] != 1:
+    if (
+        isinstance(record["schema_version"], bool)
+        or record["schema_version"] != 1
+    ):
         raise TradingDataLoaderError(
             f"Unsupported schema_version at line {line_number}."
         )
@@ -232,9 +228,7 @@ def _validate_record(
             f"Invalid candle time range at line {line_number}."
         )
 
-    expected_seconds = (
-        TIMEFRAME_MINUTES[timeframe] * 60
-    )
+    expected_seconds = TIMEFRAME_MINUTES[timeframe] * 60
 
     actual_seconds = (
         closed - opened
@@ -252,12 +246,10 @@ def _validate_record(
             f"Misaligned candle timestamp at line {line_number}."
         )
 
-    result = {
+    return {
         column: record[column]
         for column in REQUIRED_COLUMNS
     }
-
-    return result
 
 
 def _read_jsonl_file(
@@ -296,7 +288,6 @@ def _read_jsonl_file(
 
                 try:
                     raw_record = json.loads(line)
-
                 except json.JSONDecodeError as exc:
                     raise TradingDataLoaderError(
                         f"Corrupted JSONL data in "
@@ -314,7 +305,6 @@ def _read_jsonl_file(
 
     except TradingDataLoaderError:
         raise
-
     except (OSError, UnicodeError) as exc:
         raise TradingDataLoaderError(
             f"Cannot read {file_path.name}: {exc}"
@@ -326,18 +316,15 @@ def _read_jsonl_file(
         )
 
     try:
-        data = pd.DataFrame(
+        return pd.DataFrame(
             records,
             columns=REQUIRED_COLUMNS,
         )
-
     except (TypeError, ValueError) as exc:
         raise TradingDataLoaderError(
             f"Cannot build candle DataFrame for "
             f"{timeframe}: {exc}"
         ) from exc
-
-    return data
 
 
 def _validate_numeric_values(
@@ -345,7 +332,7 @@ def _validate_numeric_values(
     *,
     timeframe: str,
 ) -> None:
-    """Reject invalid numeric candle values without modifying raw data."""
+    """Validate and convert OHLCV values to finite floats."""
 
     numeric_columns = (
         "open",
@@ -362,40 +349,53 @@ def _validate_numeric_values(
             errors="coerce",
         )
 
-        for index, value in enumerate(converted):
+        if converted.isna().any():
+            bad_index = int(
+                converted[converted.isna()].index[0]
+            )
 
-            if pd.isna(value):
-                raise TradingDataLoaderError(
-                    f"{timeframe} contains a missing or "
-                    f"non-numeric {column} at row {index}."
-                )
+            raise TradingDataLoaderError(
+                f"{timeframe} contains a missing or "
+                f"non-numeric {column} at row {bad_index}."
+            )
 
-            try:
-                number = float(value)
+        try:
+            values = converted.astype(float)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise TradingDataLoaderError(
+                f"{timeframe} contains invalid {column} values."
+            ) from exc
 
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise TradingDataLoaderError(
-                    f"{timeframe} contains an invalid "
-                    f"{column} at row {index}."
-                ) from exc
+        finite_mask = values.map(math.isfinite)
 
-            if not math.isfinite(number):
-                raise TradingDataLoaderError(
-                    f"{timeframe} contains a non-finite "
-                    f"{column} at row {index}."
-                )
+        if not finite_mask.all():
+            bad_index = int(
+                finite_mask[~finite_mask].index[0]
+            )
 
-            if column != "volume" and number <= 0:
-                raise TradingDataLoaderError(
-                    f"{timeframe} contains a non-positive "
-                    f"{column} at row {index}."
-                )
+            raise TradingDataLoaderError(
+                f"{timeframe} contains a non-finite "
+                f"{column} at row {bad_index}."
+            )
 
-            if column == "volume" and number < 0:
-                raise TradingDataLoaderError(
-                    f"{timeframe} contains negative volume "
-                    f"at row {index}."
-                )
+        if column != "volume":
+            invalid = values <= 0
+        else:
+            invalid = values < 0
+
+        if invalid.any():
+            bad_index = int(
+                invalid[invalid].index[0]
+            )
+
+            raise TradingDataLoaderError(
+                f"{timeframe} contains an invalid "
+                f"{column} at row {bad_index}."
+            )
+
+        # Important: downstream calculations must receive numbers,
+        # not the original Kraken numeric strings.
+        data[column] = values
 
 
 def _prepare_timeframe_data(
@@ -472,24 +472,36 @@ def _prepare_timeframe_data(
         timeframe=timeframe,
     )
 
-    for index, row in result.iterrows():
+    # OHLC validation is now numeric, not lexicographic.
+    invalid_high = (
+        result["high"]
+        < result[["open", "low", "close"]].max(axis=1)
+    )
 
-        opened = row["open"]
-        high = row["high"]
-        low = row["low"]
-        closed = row["close"]
+    if invalid_high.any():
+        bad_index = int(
+            invalid_high[invalid_high].index[0]
+        )
 
-        if high < max(opened, low, closed):
-            raise TradingDataLoaderError(
-                f"{timeframe} contains invalid high price "
-                f"at row {index}."
-            )
+        raise TradingDataLoaderError(
+            f"{timeframe} contains invalid high price "
+            f"at row {bad_index}."
+        )
 
-        if low > min(opened, high, closed):
-            raise TradingDataLoaderError(
-                f"{timeframe} contains invalid low price "
-                f"at row {index}."
-            )
+    invalid_low = (
+        result["low"]
+        > result[["open", "high", "close"]].min(axis=1)
+    )
+
+    if invalid_low.any():
+        bad_index = int(
+            invalid_low[invalid_low].index[0]
+        )
+
+        raise TradingDataLoaderError(
+            f"{timeframe} contains invalid low price "
+            f"at row {bad_index}."
+        )
 
     if not (
         result["source"].astype(str) == "kraken"
@@ -507,11 +519,7 @@ def load_timeframe_history(
     pair: str = "XBTUSD",
     data_dir: str | Path | None = None,
 ) -> pd.DataFrame:
-    """
-    Load complete persisted history for one timeframe.
-
-    The raw JSONL file is never modified.
-    """
+    """Load complete persisted history for one timeframe."""
 
     normalized_pair = _validate_pair(pair)
 
@@ -544,23 +552,7 @@ def load_trading_candles(
     pair: str = "XBTUSD",
     data_dir: str | Path | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """
-    Load complete Kraken history for all trading timeframes.
-
-    Returns:
-        {
-            "5m": DataFrame,
-            "15m": DataFrame,
-            "1h": DataFrame,
-            "4h": DataFrame,
-        }
-
-    Every returned DataFrame contains validated, sorted
-    historical candles in the format required by TradingPipeline.
-
-    Missing, corrupted, duplicated or inconsistent history
-    stops the complete operation.
-    """
+    """Load complete Kraken history for all trading timeframes."""
 
     normalized_pair = _validate_pair(pair)
 
@@ -596,14 +588,12 @@ if __name__ == "__main__":
         )
 
         for timeframe in TRADING_TIMEFRAMES:
-
             print(
                 f"{timeframe}: "
                 f"{len(histories[timeframe])} candles"
             )
 
     except TradingDataLoaderError as exc:
-
         print(
             f"Trading data loading failed: {exc}"
         )
