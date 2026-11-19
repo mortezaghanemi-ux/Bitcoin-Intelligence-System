@@ -61,10 +61,10 @@ def _normalize_utc(
         TypeError,
         ValueError,
         OverflowError,
-    ) as exc:
+    ):
         raise ValueError(
             "Invalid collection_time timezone."
-        ) from exc
+        ) from None
 
     if (
         offset is None
@@ -190,6 +190,8 @@ def _fetch_json(
 
     url = BASE_URL + endpoint
 
+    request_failed = False
+
     try:
         response = session.get(
             url,
@@ -201,19 +203,27 @@ def _fetch_json(
 
         response.raise_for_status()
 
+    except requests.RequestException:
+        request_failed = True
+
+    if request_failed:
+        raise MempoolSpaceCollectorError(
+            f"Mempool.space request failed for {endpoint}."
+        )
+
+    invalid_json = False
+    payload = None
+
+    try:
         payload = response.json()
 
-    except requests.RequestException as exc:
-        raise MempoolSpaceCollectorError(
-            f"Mempool.space request failed "
-            f"for {endpoint}: {exc}"
-        ) from exc
+    except ValueError:
+        invalid_json = True
 
-    except ValueError as exc:
+    if invalid_json:
         raise MempoolSpaceCollectorError(
-            f"Mempool.space returned invalid JSON "
-            f"for {endpoint}."
-        ) from exc
+            f"Mempool.space returned invalid JSON for {endpoint}."
+        )
 
     _validate_json_value(payload)
 
@@ -388,10 +398,10 @@ def _load_existing_timestamps(
                 try:
                     record = json.loads(line)
 
-                except json.JSONDecodeError as exc:
+                except json.JSONDecodeError:
                     raise MempoolSpaceCollectorError(
                         f"Invalid JSONL at line {line_number}."
-                    ) from exc
+                    ) from None
 
                 if not isinstance(record, dict):
                     raise MempoolSpaceCollectorError(
@@ -407,16 +417,15 @@ def _load_existing_timestamps(
                     or not timestamp
                 ):
                     raise MempoolSpaceCollectorError(
-                        f"Missing collection timestamp "
-                        f"at line {line_number}."
+                        f"Missing collection timestamp at line {line_number}."
                     )
 
                 existing.add(timestamp)
 
-    except OSError as exc:
+    except OSError:
         raise MempoolSpaceCollectorError(
-            f"Cannot read existing on-chain history: {exc}"
-        ) from exc
+            "Cannot read existing on-chain history."
+        ) from None
 
     return existing
 
@@ -478,6 +487,13 @@ def collect_mempool_space(
     if collected_at in existing:
         return None
 
+    session_failed = False
+
+    mempool_payload = None
+    fees_payload = None
+    tip_payload = None
+    difficulty_payload = None
+
     try:
         with requests.Session() as session:
 
@@ -508,10 +524,13 @@ def collect_mempool_space(
     except MempoolSpaceCollectorError:
         raise
 
-    except requests.RequestException as exc:
+    except requests.RequestException:
+        session_failed = True
+
+    if session_failed:
         raise MempoolSpaceCollectorError(
-            f"On-chain collection failed: {exc}"
-        ) from exc
+            "Mempool.space collection failed."
+        )
 
     mempool = _validate_mempool(
         mempool_payload
@@ -566,9 +585,9 @@ def collect_mempool_space(
 
             file.flush()
 
-    except OSError as exc:
+    except OSError:
         raise MempoolSpaceCollectorError(
-            f"Cannot save on-chain raw data: {exc}"
-        ) from exc
+            "Cannot save on-chain raw data."
+        ) from None
 
     return record
