@@ -1,3 +1,4 @@
+
 """CoinGecko Bitcoin market-data collector."""
 
 from __future__ import annotations
@@ -194,7 +195,7 @@ def _load_existing_keys(
                     (metric, timestamp)
                 )
 
-    except OSError as exc:
+    except OSError:
         raise CoinGeckoCollectorError(
             "Cannot read existing CoinGecko history."
         ) from None
@@ -352,9 +353,10 @@ def collect_coingecko_market_chart(
             credential.strip()
         )
 
-    # Never expose request exception details.
-    # HTTP libraries may include sensitive headers
-    # or API credentials in exception messages.
+    # Do not retain network exception context.
+    request_failed = False
+    response = None
+
     try:
         response = requests.get(
             API_URL,
@@ -368,17 +370,28 @@ def collect_coingecko_market_chart(
 
         response.raise_for_status()
 
-        payload = response.json()
-
     except requests.RequestException:
+        request_failed = True
+
+    if request_failed:
         raise CoinGeckoCollectorError(
             "CoinGecko request failed."
-        ) from None
+        )
+
+    # Parse JSON separately from the network request.
+    invalid_json = False
+    payload = None
+
+    try:
+        payload = response.json()
 
     except ValueError:
+        invalid_json = True
+
+    if invalid_json:
         raise CoinGeckoCollectorError(
             "CoinGecko returned invalid JSON."
-        ) from None
+        )
 
     if not isinstance(payload, dict):
         raise CoinGeckoCollectorError(
