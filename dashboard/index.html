@@ -1,0 +1,287 @@
+
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#101827">
+    <meta
+        name="description"
+        content="داشبورد اطلاعات و تحلیل هوشمند بیت‌کوین"
+    >
+    <title>Bitcoin Intelligence System</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/script.js" defer></script>
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-icon" aria-hidden="true">₿</div>
+            <div>
+                <h1>Bitcoin Intelligence</h1>
+                <p>سیستم هوشمند تحلیل بیت‌کوین</p>
+            </div>
+        </div>
+
+        <div class="header-status">
+            <span id="connection-indicator" class="status-dot"></span>
+            <span id="connection-status">در انتظار اتصال</span>
+        </div>
+    </header>
+
+    <main class="dashboard-container">
+
+        <section class="page-heading">
+            <div>
+                <h2>داشبورد اصلی</h2>
+                <p>نمای کلی وضعیت بازار، پیش‌بینی و تحلیل معاملاتی</p>
+            </div>
+
+            <div class="refresh-area">
+                <span id="last-updated">آخرین به‌روزرسانی: —</span>
+                <button id="refresh-button" type="button">
+                    به‌روزرسانی
+                </button>
+            </div>
+        </section>
+
+        <section class="overview-grid" aria-label="وضعیت کلی سیستم">
+            <article class="panel overview-card">
+                <span class="card-label">وضعیت کلی</span>
+                <strong id="overall-status" class="status-value">
+                    در انتظار داده
+                </strong>
+                <span class="card-description">وضعیت داشبورد</span>
+            </article>
+
+            <article class="panel overview-card">
+                <span class="card-label">قیمت آخرین کندل</span>
+                <strong id="current-price" class="metric-value">—</strong>
+                <span class="card-description" id="price-updated">
+                    اطلاعات قیمت موجود نیست
+                </span>
+            </article>
+
+            <article class="panel overview-card">
+                <span class="card-label">وضعیت داده بازار</span>
+                <strong id="market-data-status" class="status-value">
+                    نامشخص
+                </strong>
+                <span class="card-description" id="market-data-age">
+                    زمان داده: —
+                </span>
+            </article>
+
+            <article class="panel overview-card">
+                <span class="card-label">سیگنال‌های معاملاتی</span>
+                <strong id="signal-count" class="metric-value">۰</strong>
+                <span class="card-description">سیگنال‌های قابل بررسی</span>
+            </article>
+        </section>
+
+        <section class="panel section-panel">
+            <div class="section-heading">
+                <div>
+                    <h2>اطلاعات بازار</h2>
+                    <p>آخرین کندل‌های معتبر دریافت‌شده از منبع بازار</p>
+                </div>
+
+                <div class="controls">
+                    <label for="pair-select">جفت‌ارز</label>
+                    <select id="pair-select">
+                        <option value="XBTUSD" selected>XBTUSD</option>
+                    </select>
+
+                    <label for="timeframe-select">بازه زمانی</label>
+                    <select id="timeframe-select">
+                        <option value="5m" selected>۵ دقیقه</option>
+                        <option value="15m">۱۵ دقیقه</option>
+                        <option value="1h">۱ ساعت</option>
+                        <option value="4h">۴ ساعت</option>
+                        <option value="1d">روزانه</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="market-summary">
+                <div>
+                    <span class="small-label">قیمت باز شدن</span>
+                    <strong id="candle-open">—</strong>
+                </div>
+                <div>
+                    <span class="small-label">بالاترین قیمت</span>
+                    <strong id="candle-high">—</strong>
+                </div>
+                <div>
+                    <span class="small-label">پایین‌ترین قیمت</span>
+                    <strong id="candle-low">—</strong>
+                </div>
+                <div>
+                    <span class="small-label">قیمت بسته شدن</span>
+                    <strong id="candle-close">—</strong>
+                </div>
+                <div>
+                    <span class="small-label">حجم</span>
+                    <strong id="candle-volume">—</strong>
+                </div>
+            </div>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>زمان باز شدن</th>
+                            <th>باز شدن</th>
+                            <th>بالاترین</th>
+                            <th>پایین‌ترین</th>
+                            <th>بسته شدن</th>
+                            <th>حجم</th>
+                        </tr>
+                    </thead>
+                    <tbody id="candles-table-body">
+                        <tr>
+                            <td colspan="6" class="empty-state">
+                                هنوز اطلاعاتی دریافت نشده است.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="content-grid">
+
+            <article class="panel section-panel">
+                <div class="section-heading">
+                    <div>
+                        <h2>تحلیل بازار</h2>
+                        <p>آخرین گزارش تحلیل بازار</p>
+                    </div>
+                    <span id="market-status" class="status-badge">
+                        نامشخص
+                    </span>
+                </div>
+
+                <div id="market-content" class="data-content">
+                    <p class="empty-state">گزارش تحلیل بازار موجود نیست.</p>
+                </div>
+            </article>
+
+            <article class="panel section-panel">
+                <div class="section-heading">
+                    <div>
+                        <h2>پیش‌بینی بیت‌کوین</h2>
+                        <p>آخرین گزارش موتور پیش‌بینی</p>
+                    </div>
+                    <span id="forecast-status" class="status-badge">
+                        نامشخص
+                    </span>
+                </div>
+
+                <div id="forecast-content" class="data-content">
+                    <p class="empty-state">گزارش پیش‌بینی موجود نیست.</p>
+                </div>
+            </article>
+
+        </section>
+
+        <section class="panel section-panel">
+            <div class="section-heading">
+                <div>
+                    <h2>سیگنال‌های معاملاتی</h2>
+                    <p>
+                        فقط سیگنال‌های معتبر نیازمند بررسی دستی نمایش داده می‌شوند.
+                    </p>
+                </div>
+
+                <span id="trading-status" class="status-badge">
+                    نامشخص
+                </span>
+            </div>
+
+            <div class="safety-notice">
+                <strong>حالت ایمن و دستی</strong>
+                <span>
+                    معاملات خودکار غیرفعال است. هیچ سفارشی از این داشبورد
+                    به صرافی ارسال نمی‌شود.
+                </span>
+            </div>
+
+            <div id="trading-content" class="data-content">
+                <p class="empty-state">
+                    هنوز سیگنال معاملاتی قابل نمایش وجود ندارد.
+                </p>
+            </div>
+        </section>
+
+        <section class="content-grid">
+
+            <article class="panel section-panel">
+                <div class="section-heading">
+                    <div>
+                        <h2>کیفیت داده</h2>
+                        <p>آخرین گزارش اعتبارسنجی اطلاعات</p>
+                    </div>
+                    <span id="quality-status" class="status-badge">
+                        نامشخص
+                    </span>
+                </div>
+
+                <div id="quality-content" class="data-content">
+                    <p class="empty-state">
+                        گزارش کیفیت داده موجود نیست.
+                    </p>
+                </div>
+            </article>
+
+            <article class="panel section-panel">
+                <div class="section-heading">
+                    <div>
+                        <h2>وضعیت اجزای سیستم</h2>
+                        <p>وضعیت دسترسی به بخش‌های مختلف</p>
+                    </div>
+                </div>
+
+                <div id="system-status-list" class="system-status-list">
+                    <p class="empty-state">
+                        اطلاعات وضعیت سیستم موجود نیست.
+                    </p>
+                </div>
+            </article>
+
+        </section>
+
+        <section class="panel section-panel">
+            <div class="section-heading">
+                <div>
+                    <h2>محدودیت‌ها و هشدارها</h2>
+                    <p>موارد مهم درباره اطلاعات نمایش‌داده‌شده</p>
+                </div>
+            </div>
+
+            <ul id="limitations-list" class="limitations-list">
+                <li>اطلاعات هنوز بارگذاری نشده است.</li>
+            </ul>
+        </section>
+
+        <section
+            id="error-container"
+            class="error-panel"
+            role="alert"
+            aria-live="polite"
+            hidden
+        >
+            <strong>خطا در دریافت اطلاعات</strong>
+            <p id="error-message">ارتباط با سرور برقرار نشد.</p>
+        </section>
+
+    </main>
+
+    <footer class="footer">
+        <p>Bitcoin Intelligence System</p>
+        <p>Read-only Dashboard | UTC</p>
+        <p>این داشبورد ابزار تحلیل اطلاعات است و تضمینی برای نتیجه معاملات ارائه نمی‌کند.</p>
+    </footer>
+</body>
+</html>
