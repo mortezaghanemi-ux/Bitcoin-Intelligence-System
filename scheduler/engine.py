@@ -23,20 +23,20 @@ DEFAULT_HISTORY_PATH = (
 
 TaskCallable = Callable[[], Any]
 
+SUCCESS_STATUSES = {"SUCCESS", "PASS"}
+SKIPPED_STATUSES = {"SKIPPED", "NO_NEW_DATA"}
+FAILED_STATUSES = {"FAILED", "ERROR"}
+
 
 class SchedulerError(RuntimeError):
     """Raised when scheduler configuration or execution is invalid."""
 
 
 def _utc_now() -> datetime:
-    """Return the current UTC timestamp."""
-
     return datetime.now(timezone.utc)
 
 
 def _normalize_timestamp(value: datetime) -> datetime:
-    """Validate and normalize a timezone-aware UTC timestamp."""
-
     if not isinstance(value, datetime):
         raise SchedulerError(
             "Scheduler timestamp must be a datetime."
@@ -62,31 +62,19 @@ def _normalize_timestamp(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _require_mapping(
-    value: Any,
-    name: str,
-) -> Mapping:
-    """Require a mapping configuration."""
-
+def _require_mapping(value: Any, name: str) -> Mapping:
     if not isinstance(value, Mapping):
         raise SchedulerError(
             f"{name} must be a mapping."
         )
-
     return value
 
 
-def _require_bool(
-    value: Any,
-    name: str,
-) -> bool:
-    """Require an actual boolean."""
-
+def _require_bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise SchedulerError(
             f"{name} must be a boolean."
         )
-
     return value
 
 
@@ -94,8 +82,6 @@ def _require_positive_interval(
     value: Any,
     name: str,
 ) -> float:
-    """Validate a positive finite scheduling interval."""
-
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -113,20 +99,10 @@ class SchedulerEngine:
     """
     Sequential UTC scheduler.
 
-    Tasks are injected by the application. This module does not
-    create exchange connections or execute trading orders.
+    Collection -> validation -> market analysis ->
+    forecast and manual-review-only trading.
 
-    Supported task names:
-        market_data
-        candles
-        derivatives
-        etf_flows
-        onchain
-        macro
-        validation
-        market_analysis
-        forecast
-        trader
+    This engine never connects to an exchange or executes orders.
     """
 
     def __init__(
@@ -137,10 +113,15 @@ class SchedulerEngine:
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self.config = self._extract_schedule_config(config)
-
         self.tasks = self._validate_tasks(tasks or {})
 
         self.history_path = Path(history_path)
+
+        if not callable(clock):
+            raise SchedulerError(
+                "clock must be callable."
+            )
+
         self.clock = clock
 
         self._lock = threading.Lock()
@@ -152,27 +133,18 @@ class SchedulerEngine:
     def _extract_schedule_config(
         config: Mapping[str, Any] | None,
     ) -> Mapping[str, Any]:
-        """Accept either the full project config or schedules section."""
-
         if config is None:
             from config.loader import load_config
-
             config = load_config()
 
-        root = _require_mapping(
-            config,
-            "config",
-        )
+        root = _require_mapping(config, "config")
 
         if "schedules" in root:
             schedules_file = _require_mapping(
                 root["schedules"],
                 "config.schedules",
             )
-
-            schedule_config = schedules_file.get(
-                "schedules"
-            )
+            schedule_config = schedules_file.get("schedules")
         else:
             schedule_config = root
 
@@ -185,8 +157,6 @@ class SchedulerEngine:
     def _validate_tasks(
         tasks: Mapping[str, TaskCallable],
     ) -> dict[str, TaskCallable]:
-        """Validate injected task callbacks."""
-
         if not isinstance(tasks, Mapping):
             raise SchedulerError(
                 "tasks must be a mapping."
@@ -195,7 +165,6 @@ class SchedulerEngine:
         validated = {}
 
         for name, callback in tasks.items():
-
             if not isinstance(name, str) or not name.strip():
                 raise SchedulerError(
                     "Every task name must be a non-empty string."
@@ -211,8 +180,6 @@ class SchedulerEngine:
         return validated
 
     def _validate_configuration(self) -> None:
-        """Validate scheduler configuration and safety rules."""
-
         if self.config.get("timezone") != "UTC":
             raise SchedulerError(
                 "Scheduler timezone must be UTC."
@@ -263,7 +230,7 @@ class SchedulerEngine:
                 f"history.{key}",
             )
 
-        for section in (
+        sections = (
             "market_data",
             "derivatives",
             "etf_flows",
@@ -274,7 +241,9 @@ class SchedulerEngine:
             "market_analysis",
             "forecast",
             "trader",
-        ):
+        )
+
+        for section in sections:
             if section in self.config:
                 _require_mapping(
                     self.config[section],
@@ -340,9 +309,61 @@ class SchedulerEngine:
                 "candles.collect_closed_candles_only",
             )
 
-    def _interval_for(self, task_name: str) -> timedelta | None:
-        """Return the configured interval for a periodic task."""
+        validation = self.config.get("validation", {})
 
+        for key in (
+            "enabled",
+            "run_after_collection",
+            "run_before_every_engine",
+        ):
+            if key in validation:
+                _require_bool(
+                    validation[key],
+                    f"validation.{key}",
+                )
+
+        market_analysis = self.config.get(
+            "market_analysis",
+            {},
+        )
+
+        for key in ("enabled", "run_after_validation"):
+            if key in market_analysis:
+                _require_bool(
+                    market_analysis[key],
+                    f"market_analysis.{key}",
+                )
+
+        if "enabled" in forecast:
+            _require_bool(
+                forecast["enabled"],
+                "forecast.enabled",
+            )
+
+        if "run_after_validation" in forecast:
+            _require_bool(
+                forecast["run_after_validation"],
+                "forecast.run_after_validation",
+            )
+
+        trader = self.config.get("trader", {})
+
+        for key in (
+            "enabled",
+            "run_after_data_validation",
+            "run_after_market_analysis",
+            "require_closed_candles",
+        ):
+            if key in trader:
+                _require_bool(
+                    trader[key],
+                    f"trader.{key}",
+                )
+
+    def _interval_for(
+        self,
+        task_name: str,
+    ) -> timedelta | None:
         if task_name == "candles":
             section = self.config.get("market_data", {})
             value = section.get("interval_minutes")
@@ -366,27 +387,21 @@ class SchedulerEngine:
             f"{task_name} interval",
         )
 
-        return timedelta(
-            **{unit: amount}
-        )
+        return timedelta(**{unit: amount})
 
     def _is_enabled(self, task_name: str) -> bool:
-        """Check whether a task is enabled."""
-
         section = self.config.get(task_name)
 
-        if not isinstance(section, Mapping):
-            return False
-
-        return section.get("enabled") is True
+        return (
+            isinstance(section, Mapping)
+            and section.get("enabled") is True
+        )
 
     def _is_due(
         self,
         task_name: str,
         now: datetime,
     ) -> bool:
-        """Determine whether a periodic task is due."""
-
         if not self._is_enabled(task_name):
             return False
 
@@ -406,8 +421,6 @@ class SchedulerEngine:
         self,
         record: dict[str, Any],
     ) -> None:
-        """Append one execution record to JSONL history."""
-
         history_config = self.config.get("history", {})
 
         if history_config.get("enabled") is not True:
@@ -443,18 +456,65 @@ class SchedulerEngine:
                 f"Unable to write scheduler history: {exc}"
             ) from exc
 
+    @staticmethod
+    def _safe_result(value: Any) -> Any:
+        try:
+            json.dumps(
+                value,
+                allow_nan=False,
+            )
+            return value
+
+        except (TypeError, ValueError, OverflowError):
+            return {
+                "result_type": type(value).__name__,
+                "recorded": False,
+            }
+
+    @staticmethod
+    def _result_status(result: Any) -> str:
+        """
+        Classify callback outcomes.
+
+        Generic callback results without a status field remain
+        successful for backward compatibility.
+        """
+
+        if not isinstance(result, Mapping):
+            return "SUCCESS"
+
+        status = result.get("status")
+
+        if not isinstance(status, str):
+            return "SUCCESS"
+
+        normalized = status.strip().upper()
+
+        if normalized in FAILED_STATUSES:
+            return "FAILED"
+
+        if normalized in SKIPPED_STATUSES:
+            return "SKIPPED"
+
+        if normalized in SUCCESS_STATUSES:
+            return "SUCCESS"
+
+        # Unknown status values are not silently treated as success.
+        raise SchedulerError(
+            f"Unsupported callback status: {status!r}."
+        )
+
     def _execute_task(
         self,
         task_name: str,
         timestamp: datetime,
     ) -> dict[str, Any]:
-        """Execute one registered task with configured retries."""
-
         callback = self.tasks.get(task_name)
 
         if callback is None:
             raise SchedulerError(
-                f"No callback registered for enabled task '{task_name}'."
+                f"No callback registered for enabled task "
+                f"'{task_name}'."
             )
 
         execution = self.config["execution"]
@@ -469,15 +529,18 @@ class SchedulerEngine:
             else 0
         )
 
-        started_at = _normalize_timestamp(
-            self.clock()
-        )
-
+        started_at = _normalize_timestamp(self.clock())
         last_error = None
 
         for attempt in range(maximum_retries + 1):
             try:
                 result = callback()
+                task_status = self._result_status(result)
+
+                if task_status == "FAILED":
+                    raise SchedulerError(
+                        f"Task '{task_name}' returned FAILED."
+                    )
 
                 finished_at = _normalize_timestamp(
                     self.clock()
@@ -485,13 +548,15 @@ class SchedulerEngine:
 
                 record = {
                     "task": task_name,
-                    "status": "SUCCESS",
+                    "status": task_status,
                     "attempt": attempt + 1,
                     "started_at": started_at.isoformat(),
                     "finished_at": finished_at.isoformat(),
                     "result": self._safe_result(result),
                 }
 
+                # History errors must not cause a callback to be
+                # repeated, because the callback may have side effects.
                 self._record_history(record)
 
                 self._last_runs[task_name] = timestamp
@@ -501,9 +566,7 @@ class SchedulerEngine:
             except Exception as exc:
                 last_error = exc
 
-        finished_at = _normalize_timestamp(
-            self.clock()
-        )
+        finished_at = _normalize_timestamp(self.clock())
 
         record = {
             "task": task_name,
@@ -520,38 +583,11 @@ class SchedulerEngine:
 
         return record
 
-    @staticmethod
-    def _safe_result(value: Any) -> Any:
-        """Convert callback output to JSON-safe history data."""
-
-        try:
-            json.dumps(
-                value,
-                allow_nan=False,
-            )
-            return value
-
-        except (TypeError, ValueError, OverflowError):
-            return {
-                "result_type": type(value).__name__,
-                "recorded": False,
-            }
-
     def run_cycle(
         self,
         now: datetime | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
-        """
-        Execute all currently due tasks in dependency order.
-
-        Collection -> validation -> market analysis ->
-        forecast and trader.
-
-        Missing callbacks are reported as failures when their
-        corresponding enabled task is due.
-        """
-
         timestamp = _normalize_timestamp(
             now if now is not None else self.clock()
         )
@@ -586,7 +622,6 @@ class SchedulerEngine:
                 timestamp,
                 force,
             )
-
         finally:
             self._lock.release()
 
@@ -595,9 +630,8 @@ class SchedulerEngine:
         timestamp: datetime,
         force: bool,
     ) -> dict[str, Any]:
-        """Run one sequential scheduling cycle."""
+        records: list[dict[str, Any]] = []
 
-        records = []
         collection_names = (
             "market_data",
             "candles",
@@ -624,19 +658,42 @@ class SchedulerEngine:
             )
             records.append(record)
 
-            if record["status"] == "FAILED":
-                if self.config["execution"].get(
+            if (
+                record["status"] == "FAILED"
+                and self.config["execution"].get(
                     "stop_on_critical_error"
-                ) is True:
-                    return self._cycle_result(
-                        timestamp,
-                        records,
-                        "FAILED",
-                    )
+                ) is True
+            ):
+                return self._cycle_result(
+                    timestamp,
+                    records,
+                    "FAILED",
+                )
 
-        collection_succeeded = bool(due_collections) and all(
-            record["status"] == "SUCCESS"
-            for record in records
+        collection_records = [
+            item
+            for item in records
+            if item["task"] in ("market_data", "candles")
+        ]
+
+        # Validation requires at least one successful candle
+        # collection in this cycle. A NO_NEW_DATA result does not
+        # authorize downstream engines to process stale data.
+        candle_collection_succeeded = any(
+            item["status"] == "SUCCESS"
+            for item in collection_records
+        )
+
+        collection_failures = any(
+            item["status"] == "FAILED"
+            for item in records
+            if item["task"] in collection_names
+        )
+
+        collection_succeeded = (
+            bool(due_collections)
+            and candle_collection_succeeded
+            and not collection_failures
         )
 
         validation_config = self.config.get(
@@ -644,15 +701,47 @@ class SchedulerEngine:
             {},
         )
 
-        should_validate = (
+        validation_enabled = (
             validation_config.get("enabled") is True
+        )
+
+        run_after_collection = (
+            validation_config.get(
+                "run_after_collection"
+            ) is True
+        )
+
+        run_before_every_engine = (
+            validation_config.get(
+                "run_before_every_engine"
+            ) is True
+        )
+
+        engine_requested = (
+            self._is_enabled("market_analysis")
+            or (
+                self._is_enabled("forecast")
+                and (
+                    force
+                    or self._is_due("forecast", timestamp)
+                )
+            )
+            or self._is_enabled("trader")
+        )
+
+        should_validate = (
+            validation_enabled
             and (
                 force
                 or (
                     collection_succeeded
-                    and validation_config.get(
-                        "run_after_collection"
-                    ) is True
+                    and (
+                        run_after_collection
+                        or (
+                            run_before_every_engine
+                            and engine_requested
+                        )
+                    )
                 )
             )
         )
@@ -671,81 +760,117 @@ class SchedulerEngine:
                     "FAILED",
                 )
 
-        validation_succeeded = (
-            any(
-                item["task"] == "validation"
-                and item["status"] == "SUCCESS"
-                for item in records
-            )
+        validation_succeeded = any(
+            item["task"] == "validation"
+            and item["status"] == "SUCCESS"
+            for item in records
         )
 
-        if validation_succeeded:
-            market_config = self.config.get(
+        # Every downstream engine requires successful validation
+        # in the current cycle. No stale validation result is reused.
+        if not validation_succeeded:
+            return self._cycle_result(
+                timestamp,
+                records,
+                "FAILED"
+                if any(
+                    item["status"] == "FAILED"
+                    for item in records
+                )
+                else "SUCCESS",
+            )
+
+        market_config = self.config.get(
+            "market_analysis",
+            {},
+        )
+
+        market_analysis_succeeded = False
+
+        if (
+            market_config.get("enabled") is True
+            and market_config.get(
+                "run_after_validation",
+                True,
+            ) is True
+        ):
+            record = self._execute_task(
                 "market_analysis",
-                {},
+                timestamp,
             )
+            records.append(record)
 
-            if market_config.get("enabled") is True:
-                record = self._execute_task(
-                    "market_analysis",
+            if record["status"] == "FAILED":
+                return self._cycle_result(
                     timestamp,
+                    records,
+                    "FAILED",
                 )
-                records.append(record)
 
-                if record["status"] == "FAILED":
-                    return self._cycle_result(
-                        timestamp,
-                        records,
-                        "FAILED",
-                    )
-
-        market_succeeded = (
-            any(
-                item["task"] == "market_analysis"
-                and item["status"] == "SUCCESS"
-                for item in records
+            market_analysis_succeeded = (
+                record["status"] == "SUCCESS"
             )
+
+        forecast_config = self.config.get(
+            "forecast",
+            {},
         )
 
-        if validation_succeeded:
-            forecast_config = self.config.get(
-                "forecast",
-                {},
+        forecast_ready = (
+            forecast_config.get("enabled") is True
+            and (
+                force
+                or self._is_due("forecast", timestamp)
             )
+            and forecast_config.get(
+                "run_after_validation",
+                True,
+            ) is True
+        )
 
-            if (
-                forecast_config.get("enabled") is True
-                and (
-                    force
-                    or self._is_due("forecast", timestamp)
-                )
-            ):
-                record = self._execute_task(
-                    "forecast",
+        if forecast_ready:
+            record = self._execute_task(
+                "forecast",
+                timestamp,
+            )
+            records.append(record)
+
+            if record["status"] == "FAILED":
+                return self._cycle_result(
                     timestamp,
+                    records,
+                    "FAILED",
                 )
-                records.append(record)
 
         trader_config = self.config.get(
             "trader",
             {},
         )
 
+        trader_requires_validation = (
+            trader_config.get(
+                "run_after_data_validation",
+                True,
+            ) is True
+        )
+
+        trader_requires_analysis = (
+            trader_config.get(
+                "run_after_market_analysis",
+                True,
+            ) is True
+        )
+
         trader_ready = (
-            validation_succeeded
+            trader_config.get("enabled") is True
+            and trader_requires_validation
             and (
-                not trader_config.get(
-                    "run_after_market_analysis",
-                    True,
-                )
-                or market_succeeded
+                not trader_requires_analysis
+                or market_analysis_succeeded
             )
         )
 
-        if (
-            trader_config.get("enabled") is True
-            and trader_ready
-        ):
+        if trader_ready:
             record = self._execute_task(
                 "trader",
                 timestamp,
@@ -769,14 +894,16 @@ class SchedulerEngine:
         records: list[dict[str, Any]],
         status: str,
     ) -> dict[str, Any]:
-        """Build a standardized cycle result."""
-
         return {
             "status": status,
             "timestamp": timestamp.isoformat(),
             "task_count": len(records),
             "successful_tasks": sum(
                 item["status"] == "SUCCESS"
+                for item in records
+            ),
+            "skipped_tasks": sum(
+                item["status"] == "SKIPPED"
                 for item in records
             ),
             "failed_tasks": sum(
@@ -793,8 +920,6 @@ class SchedulerEngine:
         }
 
     def get_history(self) -> list[dict[str, Any]]:
-        """Read scheduler execution history."""
-
         if not self.history_path.exists():
             return []
 
@@ -813,12 +938,14 @@ class SchedulerEngine:
                         record = json.loads(line)
                     except json.JSONDecodeError as exc:
                         raise SchedulerError(
-                            f"Invalid history JSON at line {line_number}."
+                            f"Invalid history JSON at line "
+                            f"{line_number}."
                         ) from exc
 
                     if not isinstance(record, dict):
                         raise SchedulerError(
-                            f"Invalid history record at line {line_number}."
+                            f"Invalid history record at line "
+                            f"{line_number}."
                         )
 
                     records.append(record)
