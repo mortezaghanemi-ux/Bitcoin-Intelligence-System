@@ -6,10 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from reports.engine import (
-    ReportEngine,
-    ReportEngineError,
-)
+from reports.engine import ReportEngine, ReportEngineError
 from reports.trading_performance_report import (
     PERIODS_PER_YEAR,
     TradingPerformanceReportError,
@@ -69,7 +66,6 @@ def make_backtest_result(**overrides):
     }
 
     result.update(overrides)
-
     return result
 
 
@@ -78,21 +74,15 @@ def make_backtest_result(**overrides):
 # -----------------------------------------
 
 def test_builds_valid_trading_performance_report():
-    result = make_backtest_result()
-
     report = build_trading_performance_report(
-        result,
+        make_backtest_result(),
         generated_at=GENERATED_AT,
     )
 
     assert report["report_type"] == "trading_performance"
     assert report["generated_at"] == GENERATED_AT
     assert report["source"] == "Bitcoin-Intelligence-System"
-
-    assert report["metadata"]["performance_type"] == (
-        "BACKTEST_ONLY"
-    )
-
+    assert report["metadata"]["performance_type"] == "BACKTEST_ONLY"
     assert report["metadata"]["execution_timeframe"] == "5m"
     assert report["metadata"]["periods_per_year"] == 105120
     assert report["metadata"]["trade_count"] == 1
@@ -164,9 +154,9 @@ def test_report_explicitly_disclaims_live_performance():
     )
 
     assert report["metadata"]["live_performance_verified"] is False
-
-    assert "does not represent verified live trading performance" in (
-        report["payload"]["interpretation"]
+    assert (
+        "does not represent verified live trading performance"
+        in report["payload"]["interpretation"]
     )
 
 
@@ -196,13 +186,11 @@ def test_uses_timeframe_specific_annualization(
         generated_at=GENERATED_AT,
     )
 
-    assert report["metadata"]["periods_per_year"] == (
-        expected_periods
+    assert report["metadata"]["periods_per_year"] == expected_periods
+    assert (
+        report["payload"]["metrics"]["metadata"]["periods_per_year"]
+        == expected_periods
     )
-
-    assert report["payload"]["metrics"]["metadata"][
-        "periods_per_year"
-    ] == expected_periods
 
 
 def test_custom_annualization_periods_are_used():
@@ -213,10 +201,10 @@ def test_custom_annualization_periods_are_used():
     )
 
     assert report["metadata"]["periods_per_year"] == 50000
-
-    assert report["payload"]["metrics"]["metadata"][
-        "periods_per_year"
-    ] == 50000
+    assert (
+        report["payload"]["metrics"]["metadata"]["periods_per_year"]
+        == 50000
+    )
 
 
 @pytest.mark.parametrize(
@@ -227,7 +215,6 @@ def test_custom_annualization_periods_are_used():
         True,
         1.5,
         "105120",
-        None,
     ],
 )
 def test_rejects_invalid_custom_annualization_periods(value):
@@ -237,6 +224,16 @@ def test_rejects_invalid_custom_annualization_periods(value):
             generated_at=GENERATED_AT,
             periods_per_year=value,
         )
+
+
+def test_none_annualization_periods_use_timeframe_default():
+    report = build_trading_performance_report(
+        make_backtest_result(execution_timeframe="5m"),
+        generated_at=GENERATED_AT,
+        periods_per_year=None,
+    )
+
+    assert report["metadata"]["periods_per_year"] == 105120
 
 
 # -----------------------------------------
@@ -310,9 +307,7 @@ def test_rejects_unsupported_execution_timeframe(timeframe):
     ],
 )
 def test_rejects_invalid_execution_metadata(execution):
-    result = make_backtest_result(
-        execution=execution,
-    )
+    result = make_backtest_result(execution=execution)
 
     with pytest.raises(
         TradingPerformanceReportError,
@@ -332,10 +327,7 @@ def test_rejects_invalid_execution_metadata(execution):
         ("order_execution", "false"),
     ],
 )
-def test_rejects_unsafe_execution_settings(
-    field,
-    invalid_value,
-):
+def test_rejects_unsafe_execution_settings(field, invalid_value):
     result = make_backtest_result()
     result["execution"][field] = invalid_value
 
@@ -357,10 +349,7 @@ def test_rejects_unsafe_execution_settings(
         ("equity_curve", {}),
     ],
 )
-def test_rejects_invalid_backtest_sections(
-    field,
-    value,
-):
+def test_rejects_invalid_backtest_sections(field, value):
     result = make_backtest_result(**{field: value})
 
     with pytest.raises(TradingPerformanceReportError):
@@ -378,9 +367,7 @@ def test_rejects_invalid_backtest_sections(
     ],
 )
 def test_rejects_invalid_backtest_limitations(limitations):
-    result = make_backtest_result(
-        limitations=limitations,
-    )
+    result = make_backtest_result(limitations=limitations)
 
     with pytest.raises(
         TradingPerformanceReportError,
@@ -395,7 +382,6 @@ def test_rejects_invalid_backtest_limitations(limitations):
 
 def test_rejects_invalid_metrics_input():
     result = make_backtest_result()
-
     result["trades"] = [
         {
             "signal_id": "signal-001",
@@ -412,16 +398,9 @@ def test_rejects_invalid_metrics_input():
 
 def test_rejects_duplicate_trade_signal_ids():
     result = make_backtest_result()
-
     result["trades"] = [
-        {
-            "signal_id": "signal-001",
-            "net_pnl": 50.0,
-        },
-        {
-            "signal_id": "signal-001",
-            "net_pnl": 50.0,
-        },
+        {"signal_id": "signal-001", "net_pnl": 50.0},
+        {"signal_id": "signal-001", "net_pnl": 50.0},
     ]
 
     with pytest.raises(
@@ -433,7 +412,6 @@ def test_rejects_duplicate_trade_signal_ids():
 
 def test_rejects_non_increasing_equity_timestamps():
     result = make_backtest_result()
-
     result["equity_curve"] = [
         {
             "timestamp": "2026-11-20T07:05:00+00:00",
@@ -454,7 +432,6 @@ def test_rejects_non_increasing_equity_timestamps():
 
 def test_rejects_equity_curve_final_value_mismatch():
     result = make_backtest_result()
-
     result["equity_curve"][-1]["equity"] = 9999.0
 
     with pytest.raises(
@@ -522,10 +499,7 @@ def test_create_report_saves_report(tmp_path):
     assert result["status"] == "SUCCESS"
     assert result["report_type"] == "trading_performance"
     assert result["storage"]["saved"] is True
-
-    saved_path = result["storage"]["path"]
-
-    assert saved_path.endswith(".json")
+    assert result["storage"]["path"].endswith(".json")
 
 
 def test_create_report_can_use_report_engine(tmp_path):
@@ -548,9 +522,7 @@ def test_create_report_can_use_report_engine(tmp_path):
     assert history[0]["report_id"] == result["report_id"]
 
 
-def test_create_report_rejects_engine_and_directory_together(
-    tmp_path,
-):
+def test_create_report_rejects_engine_and_directory_together(tmp_path):
     engine = ReportEngine(tmp_path)
 
     with pytest.raises(
@@ -564,12 +536,8 @@ def test_create_report_rejects_engine_and_directory_together(
         )
 
 
-def test_create_report_rejects_invalid_backtest_before_saving(
-    tmp_path,
-):
-    result = make_backtest_result(
-        status="FAILED",
-    )
+def test_create_report_rejects_invalid_backtest_before_saving(tmp_path):
+    result = make_backtest_result(status="FAILED")
 
     with pytest.raises(TradingPerformanceReportError):
         create_trading_performance_report(
