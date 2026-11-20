@@ -1,3 +1,4 @@
+
 """FRED economic data collector."""
 
 from __future__ import annotations
@@ -121,8 +122,8 @@ def _validate_api_key(
         or not credential.strip()
     ):
         raise ValueError(
-            "FRED_API_KEY is required. "
-            "Set it as an environment variable."
+            "FRED API key is required. "
+            "Set FRED_API_KEY as an environment variable."
         )
 
     credential = credential.strip()
