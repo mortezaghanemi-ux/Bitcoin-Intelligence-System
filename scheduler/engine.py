@@ -32,6 +32,13 @@ class SchedulerError(RuntimeError):
     """Raised when scheduler configuration or execution is invalid."""
 
 
+class _UnsetTimestamp:
+    """Internal sentinel for an omitted scheduler timestamp."""
+
+
+_UNSET_TIMESTAMP = _UnsetTimestamp()
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -618,12 +625,21 @@ class SchedulerEngine:
 
     def run_cycle(
         self,
-        now: datetime | None = None,
+        now: datetime | None | _UnsetTimestamp = _UNSET_TIMESTAMP,
         force: bool = False,
     ) -> dict[str, Any]:
-        timestamp = _normalize_timestamp(
-            now if now is not None else self.clock()
-        )
+        """
+        Run one scheduler cycle.
+
+        If now is omitted, the injected clock supplies the timestamp.
+        If now is explicitly None or is not a valid UTC datetime,
+        SchedulerError is raised.
+        """
+
+        if isinstance(now, _UnsetTimestamp):
+            timestamp = _normalize_timestamp(self.clock())
+        else:
+            timestamp = _normalize_timestamp(now)
 
         if not isinstance(force, bool):
             raise SchedulerError(
