@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import json
 import math
-
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+import numpy as np
 
 from market_analysis.engine import analyze_market
 from reports.engine import (
@@ -29,12 +31,6 @@ REQUIRED_COMPONENTS = (
 )
 
 VALID_DIRECTIONS = {
-    "BULLISH",
-    "BEARISH",
-    "NEUTRAL",
-}
-
-VALID_TRENDS = {
     "BULLISH",
     "BEARISH",
     "NEUTRAL",
@@ -90,11 +86,25 @@ def _parse_utc_timestamp(
             f"{field_name} must use UTC."
         )
 
-    return timestamp.astimezone(
-        datetime.now().astimezone().tzinfo
-    ).astimezone(
-        __import__("datetime").timezone.utc
-    )
+    return timestamp.astimezone(timezone.utc)
+
+
+def _finite_number(
+    value: Any,
+    field_name: str,
+) -> float:
+    """Validate and normalize a finite numeric value."""
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float, np.number))
+        or not math.isfinite(float(value))
+    ):
+        raise MarketReportError(
+            f"{field_name} must be a finite number."
+        )
+
+    return float(value)
 
 
 def _positive_number(
@@ -103,17 +113,14 @@ def _positive_number(
 ) -> float:
     """Validate a finite positive number."""
 
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value <= 0
-    ):
+    number = _finite_number(value, field_name)
+
+    if number <= 0:
         raise MarketReportError(
-            f"{field_name} must be a finite positive number."
+            f"{field_name} must be greater than zero."
         )
 
-    return float(value)
+    return number
 
 
 def _non_negative_integer(
@@ -124,20 +131,20 @@ def _non_negative_integer(
 
     if (
         isinstance(value, bool)
-        or not isinstance(value, int)
+        or not isinstance(value, (int, np.integer))
         or value < 0
     ):
         raise MarketReportError(
             f"{field_name} must be a non-negative integer."
         )
 
-    return value
+    return int(value)
 
 
 def _validate_sources(value: Any) -> list[str]:
     """Validate source identifiers."""
 
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, (list, tuple)) or not value:
         raise MarketReportError(
             "Market analysis must contain at least one data source."
         )
@@ -151,6 +158,112 @@ def _validate_sources(value: Any) -> list[str]:
         )
 
     return sorted(set(source.strip() for source in value))
+
+
+def _normalize_json_value(value: Any, path: str = "payload") -> Any:
+    """Convert supported scientific Python values into strict JSON values."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+
+    if isinstance(value, np.integer):
+        return int(value)
+
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        if not math.isfinite(number):
+            raise MarketReportError(
+                f"{path} contains a non-finite number."
+            )
+        return number
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise MarketReportError(
+                f"{path} contains a non-UTC datetime."
+            )
+        return value.astimezone(timezone.utc).isoformat()
+
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise MarketReportError(
+                    f"{path} contains a non-string dictionary key."
+                )
+            normalized[key] = _normalize_json_value(
+                item,
+                f"{path}.{key}",
+            )
+        return normalized
+
+    if isinstance(value, (list, tuple)):
+        return [
+            _normalize_json_value(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+
+    if isinstance(value, np.ndarray):
+        return _normalize_json_value(value.tolist(), path)
+
+    raise MarketReportError(
+        f"{path} contains an unsupported JSON value: "
+        f"{type(value).__name__}."
+    )
+
+
+def _validate_component_metadata(
+    component: str,
+    result: Any,
+    timestamp: datetime,
+    candle_count: int,
+    last_close_time: datetime,
+) -> dict[str, Any]:
+    """Validate shared metadata returned by a market component."""
+
+    if not isinstance(result, dict):
+        raise MarketReportError(
+            f"Invalid result for component: {component}."
+        )
+
+    if result.get("status") != "SUCCESS":
+        raise MarketReportError(
+            f"Component '{component}' did not succeed."
+        )
+
+    component_timestamp = _parse_utc_timestamp(
+        result.get("analysis_timestamp"),
+        f"{component}.analysis_timestamp",
+    )
+
+    if component_timestamp != timestamp:
+        raise MarketReportError(
+            f"Component '{component}' has a mismatched timestamp."
+        )
+
+    component_count = _non_negative_integer(
+        result.get("candles_analyzed"),
+        f"{component}.candles_analyzed",
+    )
+
+    if component_count != candle_count:
+        raise MarketReportError(
+            f"Component '{component}' analyzed a different candle count."
+        )
+
+    component_close_time = _parse_utc_timestamp(
+        result.get("last_candle_close_time"),
+        f"{component}.last_candle_close_time",
+    )
+
+    if component_close_time != last_close_time:
+        raise MarketReportError(
+            f"Component '{component}' analyzed a different last candle."
+        )
+
+    _validate_sources(result.get("source"))
+
+    return result
 
 
 def _validate_market_analysis(
@@ -179,8 +292,7 @@ def _validate_market_analysis(
     )
 
     missing = [
-        field
-        for field in required_fields
+        field for field in required_fields
         if field not in result
     ]
 
@@ -215,14 +327,12 @@ def _validate_market_analysis(
         "candles_analyzed",
     )
 
-    if candle_count <= 0:
+    if candle_count == 0:
         raise MarketReportError(
             "Market analysis must contain at least one candle."
         )
 
-    sources = _validate_sources(
-        result["source"]
-    )
+    sources = _validate_sources(result["source"])
 
     analyses = result["analyses"]
 
@@ -232,8 +342,7 @@ def _validate_market_analysis(
         )
 
     missing_components = [
-        component
-        for component in REQUIRED_COMPONENTS
+        component for component in REQUIRED_COMPONENTS
         if component not in analyses
     ]
 
@@ -244,43 +353,13 @@ def _validate_market_analysis(
         )
 
     for component in REQUIRED_COMPONENTS:
-        component_result = analyses[component]
-
-        if not isinstance(component_result, dict):
-            raise MarketReportError(
-                f"Invalid result for component: {component}."
-            )
-
-        if component_result.get("status") != "SUCCESS":
-            raise MarketReportError(
-                f"Component '{component}' did not succeed."
-            )
-
-        if (
-            component_result.get("analysis_timestamp")
-            != timestamp.isoformat()
-        ):
-            raise MarketReportError(
-                f"Component '{component}' has a mismatched timestamp."
-            )
-
-        if (
-            component_result.get("candles_analyzed")
-            != candle_count
-        ):
-            raise MarketReportError(
-                f"Component '{component}' analyzed a different candle count."
-            )
-
-        component_close_time = _parse_utc_timestamp(
-            component_result.get("last_candle_close_time"),
-            f"{component}.last_candle_close_time",
+        _validate_component_metadata(
+            component=component,
+            result=analyses[component],
+            timestamp=timestamp,
+            candle_count=candle_count,
+            last_close_time=last_close_time,
         )
-
-        if component_close_time != last_close_time:
-            raise MarketReportError(
-                f"Component '{component}' analyzed a different last candle."
-            )
 
     confluence = result["confluence"]
 
@@ -294,10 +373,12 @@ def _validate_market_analysis(
             "Confluence analysis did not succeed."
         )
 
-    if (
-        confluence.get("analysis_timestamp")
-        != timestamp.isoformat()
-    ):
+    confluence_timestamp = _parse_utc_timestamp(
+        confluence.get("analysis_timestamp"),
+        "confluence.analysis_timestamp",
+    )
+
+    if confluence_timestamp != timestamp:
         raise MarketReportError(
             "Confluence timestamp does not match market analysis."
         )
@@ -309,28 +390,34 @@ def _validate_market_analysis(
             "Confluence contains an invalid market direction."
         )
 
-    score = confluence.get("confluence_score")
+    score = _finite_number(
+        confluence.get("confluence_score"),
+        "confluence_score",
+    )
 
-    if (
-        isinstance(score, bool)
-        or not isinstance(score, (int, float))
-        or not math.isfinite(score)
-        or not -100 <= score <= 100
-    ):
+    if not -100 <= score <= 100:
         raise MarketReportError(
             "Confluence score must be between -100 and 100."
         )
 
-    agreement = confluence.get("agreement_ratio")
+    agreement = _finite_number(
+        confluence.get("agreement_ratio"),
+        "agreement_ratio",
+    )
 
-    if (
-        isinstance(agreement, bool)
-        or not isinstance(agreement, (int, float))
-        or not math.isfinite(agreement)
-        or not 0 <= agreement <= 1
-    ):
+    if not 0 <= agreement <= 1:
         raise MarketReportError(
             "Confluence agreement ratio must be between 0 and 1."
+        )
+
+    confluence_count = _non_negative_integer(
+        confluence.get("candles_analyzed"),
+        "confluence.candles_analyzed",
+    )
+
+    if confluence_count != candle_count:
+        raise MarketReportError(
+            "Confluence analyzed a different candle count."
         )
 
     confluence_close_time = _parse_utc_timestamp(
@@ -343,6 +430,32 @@ def _validate_market_analysis(
             "Confluence last candle does not match market analysis."
         )
 
+    confluence_sources = _validate_sources(
+        confluence.get("source")
+    )
+
+    if confluence_sources != sources:
+        raise MarketReportError(
+            "Confluence sources do not match market analysis sources."
+        )
+
+    confluence_price = confluence.get("market_price")
+
+    if confluence_price is not None:
+        confluence_price = _positive_number(
+            confluence_price,
+            "confluence.market_price",
+        )
+        if not math.isclose(
+            confluence_price,
+            market_price,
+            rel_tol=1e-9,
+            abs_tol=1e-8,
+        ):
+            raise MarketReportError(
+                "Confluence market price does not match market analysis."
+            )
+
     return {
         "timestamp": timestamp,
         "last_close_time": last_close_time,
@@ -351,7 +464,6 @@ def _validate_market_analysis(
         "sources": sources,
         "analyses": analyses,
         "confluence": confluence,
-        "original": result,
     }
 
 
@@ -368,7 +480,7 @@ def _build_market_summary(
 
     trend_direction = trend.get("trend")
 
-    if trend_direction not in VALID_TRENDS:
+    if trend_direction not in VALID_DIRECTIONS:
         raise MarketReportError(
             "Trend analysis contains an invalid direction."
         )
@@ -387,27 +499,37 @@ def _build_market_summary(
             "Market regime contains an invalid direction."
         )
 
-    moving_averages = trend.get(
-        "moving_averages",
-        {},
-    )
+    moving_averages = trend.get("moving_averages", {})
 
     if not isinstance(moving_averages, dict):
         raise MarketReportError(
             "Trend moving averages must be a dictionary."
         )
 
-    levels = structure.get(
-        "levels",
-        {},
-    )
+    levels = structure.get("levels", {})
 
     if not isinstance(levels, dict):
         raise MarketReportError(
             "Price structure levels must be a dictionary."
         )
 
-    return {
+    structure_breaks = structure.get("structure_breaks", [])
+    developing_structures = structure.get(
+        "developing_structures",
+        [],
+    )
+
+    if not isinstance(structure_breaks, list):
+        raise MarketReportError(
+            "Structure breaks must be a list."
+        )
+
+    if not isinstance(developing_structures, list):
+        raise MarketReportError(
+            "Developing structures must be a list."
+        )
+
+    summary = {
         "market_price": validated["market_price"],
         "trend": {
             "direction": trend_direction,
@@ -423,12 +545,8 @@ def _build_market_summary(
             "direction": structure.get("trend"),
             "levels": levels,
             "summary": structure.get("summary", {}),
-            "latest_structure_breaks": (
-                structure.get("structure_breaks", [])[-5:]
-            ),
-            "developing_structures": (
-                structure.get("developing_structures", [])
-            ),
+            "latest_structure_breaks": structure_breaks[-5:],
+            "developing_structures": developing_structures,
         },
         "regime": {
             "classification": regime_name,
@@ -454,6 +572,8 @@ def _build_market_summary(
         "sources": validated["sources"],
     }
 
+    return _normalize_json_value(summary)
+
 
 def build_market_report(
     market_analysis: dict[str, Any],
@@ -468,18 +588,11 @@ def build_market_report(
     create trading signals, or execute trades.
     """
 
-    validated = _validate_market_analysis(
-        market_analysis
-    )
+    validated = _validate_market_analysis(market_analysis)
 
-    summary = _build_market_summary(
-        validated
-    )
+    summary = _build_market_summary(validated)
 
-    limitations = market_analysis.get(
-        "limitations",
-        [],
-    )
+    limitations = market_analysis.get("limitations", [])
 
     if not isinstance(limitations, list):
         raise MarketReportError(
@@ -504,6 +617,8 @@ def build_market_report(
             "Market analysis is informational and is not a trading signal."
         ),
     }
+
+    payload = _normalize_json_value(payload)
 
     metadata = {
         "analysis_timestamp": validated["timestamp"].isoformat(),
@@ -566,7 +681,7 @@ def generate_market_report(
                 bearish_threshold=bearish_threshold,
             )
 
-        except Exception as exc:
+        except (TypeError, ValueError, RuntimeError) as exc:
             raise MarketReportError(
                 f"Unable to run market analysis: {exc}"
             ) from exc
@@ -578,14 +693,12 @@ def generate_market_report(
             component_parameters,
             weights,
         )
-    ):
+    ) or bullish_threshold != 20.0 or bearish_threshold != 20.0:
         raise MarketReportError(
             "Analysis parameters cannot be supplied with an existing result."
         )
 
-    report_document = build_market_report(
-        market_analysis
-    )
+    report_document = build_market_report(market_analysis)
 
     engine = ReportEngine(
         output_directory=output_directory
