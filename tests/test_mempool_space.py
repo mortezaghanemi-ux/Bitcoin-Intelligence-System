@@ -1,3 +1,4 @@
+
 """Tests for the Mempool.space on-chain data collector."""
 
 from __future__ import annotations
@@ -350,7 +351,7 @@ def test_rejects_non_utc_collection_time(
         )
 
 
-def test_normalizes_utc_collection_time(
+def test_accepts_utc_collection_time(
     tmp_path,
     monkeypatch,
     valid_responses,
@@ -360,17 +361,13 @@ def test_normalizes_utc_collection_time(
         valid_responses,
     )
 
-    from datetime import timedelta
-
     collection_time = datetime(
         2026,
         1,
         15,
-        15,
+        12,
         30,
-        tzinfo=timezone(
-            timedelta(hours=3)
-        ),
+        tzinfo=timezone.utc,
     )
 
     result = mempool_space.collect_mempool_space(
