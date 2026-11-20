@@ -1,7 +1,7 @@
+
 """Tests for the FRED economic data collector."""
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -908,7 +908,7 @@ def test_api_key_is_required(
 
     with pytest.raises(
         ValueError,
-        match="FRED_API_KEY is required",
+        match="FRED API key is required",
     ):
         collect_fred_observations(
             ["DGS10"],
