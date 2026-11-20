@@ -1,8 +1,10 @@
+
 """Tests for the CoinGecko Bitcoin market-data collector."""
 
 import json
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 import requests
@@ -849,7 +851,24 @@ def test_handles_output_file_write_error(tmp_path, monkeypatch):
     mock_response(monkeypatch, make_payload())
 
     output_file = tmp_path / "coingecko_BTC_usd_1d.jsonl"
-    output_file.mkdir()
+    original_open = Path.open
+
+    def fail_append_open(path, mode="r", *args, **kwargs):
+        if path == output_file and mode == "a":
+            raise OSError("Simulated output write failure.")
+
+        return original_open(
+            path,
+            mode,
+            *args,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        Path,
+        "open",
+        fail_append_open,
+    )
 
     with pytest.raises(
         coingecko.CoinGeckoCollectorError,
