@@ -9,7 +9,8 @@ Safety and data policies:
 - Raw collector data remains append-only.
 - Only validated closed candles reach analysis engines.
 - NO_NEW_DATA is a normal collection outcome.
-- Analysis requires fresh validated 1h candles.
+- Full persisted candle history is shared across analysis and trading.
+- Stale 1h history prevents market analysis.
 - Forecast reuses the market analysis from the same cycle.
 - Trading remains manual-review-only.
 - No exchange connection or order execution is permitted.
@@ -24,9 +25,11 @@ import math
 import os
 import threading
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+import pandas as pd
 
 from config.loader import ConfigurationError, load_config
 from scheduler.engine import SchedulerEngine, SchedulerError
@@ -36,6 +39,13 @@ DEFAULT_PAIR = "XBTUSD"
 DEFAULT_POLL_INTERVAL_SECONDS = 30.0
 
 SUPPORTED_TIMEFRAMES = ("5m", "15m", "1h", "4h")
+
+TIMEFRAME_MINUTES = {
+    "5m": 5,
+    "15m": 15,
+    "1h": 60,
+    "4h": 240,
+}
 
 LOGGER = logging.getLogger("bitcoin_intelligence.scheduler")
 
@@ -247,11 +257,6 @@ class SchedulerRuntime:
         )
 
     def _validate_safety(self) -> None:
-        # Actual config/trader.yaml structure:
-        # trader:
-        #   execution: ...
-        #   risk: ...
-
         trader_file = _mapping(
             self.config.get("trader"),
             "config.trader",
@@ -376,6 +381,7 @@ class SchedulerRuntime:
                 "timestamp": timestamp,
                 "candle_results": {},
                 "accepted_candles": {},
+                "historical_candles": {},
                 "collection_failures": [],
                 "validation_passed": False,
                 "fresh_timeframes": [],
@@ -525,6 +531,178 @@ class SchedulerRuntime:
             ),
         }
 
+    def _load_shared_history(self) -> dict[str, pd.DataFrame]:
+        """Load complete persisted history once for this scheduler cycle."""
+
+        from trader.data_loader import (
+            TradingDataLoaderError,
+            load_trading_candles,
+        )
+
+        try:
+            histories = load_trading_candles(
+                pair=self.pair,
+            )
+
+        except (
+            TradingDataLoaderError,
+            ValueError,
+            TypeError,
+            OSError,
+        ) as exc:
+            raise SchedulerRuntimeError(
+                f"Unable to load complete persisted candle history: {exc}"
+            ) from exc
+
+        if not isinstance(histories, dict):
+            raise SchedulerRuntimeError(
+                "Historical candle loader returned an invalid result."
+            )
+
+        if set(histories) != set(SUPPORTED_TIMEFRAMES):
+            raise SchedulerRuntimeError(
+                "Historical candle loader returned an incomplete "
+                "timeframe collection."
+            )
+
+        prepared: dict[str, pd.DataFrame] = {}
+
+        for timeframe in SUPPORTED_TIMEFRAMES:
+            candles = histories.get(timeframe)
+
+            if not isinstance(candles, pd.DataFrame):
+                raise SchedulerRuntimeError(
+                    f"Historical {timeframe} data is not a DataFrame."
+                )
+
+            if candles.empty:
+                raise SchedulerRuntimeError(
+                    f"Historical {timeframe} data is empty."
+                )
+
+            prepared[timeframe] = candles.copy(deep=True)
+
+        return prepared
+
+    def _candle_freshness_grace_minutes(self) -> float:
+        """Read the configured candle freshness grace period."""
+
+        quality_file = _mapping(
+            self.config.get("data_quality"),
+            "config.data_quality",
+        )
+
+        freshness = _mapping(
+            quality_file.get("freshness"),
+            "config.data_quality.freshness",
+        )
+
+        if freshness.get("enabled") is not True:
+            raise SchedulerRuntimeError(
+                "Candle freshness validation must be enabled."
+            )
+
+        if freshness.get("reject_stale_data") is not True:
+            raise SchedulerRuntimeError(
+                "Stale candle rejection must remain enabled."
+            )
+
+        limits = _mapping(
+            freshness.get("max_age_minutes"),
+            "config.data_quality.freshness.max_age_minutes",
+        )
+
+        grace = limits.get("candles")
+
+        if (
+            isinstance(grace, bool)
+            or not isinstance(grace, (int, float))
+            or not math.isfinite(grace)
+            or grace < 0
+        ):
+            raise SchedulerRuntimeError(
+                "Invalid candle freshness grace period."
+            )
+
+        return float(grace)
+
+    def _is_history_fresh(
+        self,
+        timeframe: str,
+        candles: pd.DataFrame,
+        timestamp: datetime,
+    ) -> bool:
+        """Check whether the latest persisted candle is fresh and closed."""
+
+        if not isinstance(candles, pd.DataFrame) or candles.empty:
+            return False
+
+        if "close_time" not in candles.columns:
+            return False
+
+        try:
+            close_times = pd.to_datetime(
+                candles["close_time"],
+                errors="coerce",
+            )
+
+            if close_times.isna().any():
+                return False
+
+            if close_times.dt.tz is None:
+                return False
+
+            if str(close_times.dt.tz) not in (
+                "UTC",
+                "UTC+00:00",
+            ):
+                offsets = close_times.map(
+                    lambda value: value.utcoffset()
+                )
+
+                if any(
+                    offset is None or offset.total_seconds() != 0
+                    for offset in offsets
+                ):
+                    return False
+
+            latest_close = close_times.max().to_pydatetime()
+
+        except (
+            TypeError,
+            ValueError,
+            AttributeError,
+            OverflowError,
+        ):
+            return False
+
+        if latest_close.tzinfo is None:
+            return False
+
+        try:
+            offset = latest_close.utcoffset()
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+        if offset is None or offset.total_seconds() != 0:
+            return False
+
+        age = timestamp - latest_close.astimezone(timezone.utc)
+
+        if age < timedelta(0):
+            return False
+
+        try:
+            grace = self._candle_freshness_grace_minutes()
+        except SchedulerRuntimeError:
+            raise
+
+        maximum_age = timedelta(
+            minutes=TIMEFRAME_MINUTES[timeframe] + grace
+        )
+
+        return age <= maximum_age
+
     def _task_market_data(self) -> dict[str, Any]:
         if not self._source_enabled("market"):
             return {
@@ -579,7 +757,6 @@ class SchedulerRuntime:
         results = []
 
         for timeframe in candles["timeframes"]:
-            # The 5m timeframe is collected by market_data.
             if timeframe == "5m":
                 continue
 
@@ -772,6 +949,8 @@ class SchedulerRuntime:
                 self._cycle_state["candle_results"]
             )
 
+            timestamp = self._cycle_state["timestamp"]
+
         if failures:
             raise SchedulerRuntimeError(
                 "Candle collection failed for: "
@@ -818,10 +997,27 @@ class SchedulerRuntime:
                 0,
             )
 
+        # Load complete persisted history after collection.
+        # NO_NEW_DATA is acceptable when valid history already exists.
+        histories = self._load_shared_history()
+
+        history_freshness = {
+            timeframe: self._is_history_fresh(
+                timeframe,
+                histories[timeframe],
+                timestamp,
+            )
+            for timeframe in SUPPORTED_TIMEFRAMES
+        }
+
         with self._state_lock:
             self._cycle_state["validation_passed"] = True
             self._cycle_state["fresh_timeframes"] = (
                 fresh_timeframes
+            )
+            self._cycle_state["historical_candles"] = histories
+            self._cycle_state["history_freshness"] = (
+                history_freshness
             )
 
         return {
@@ -829,46 +1025,60 @@ class SchedulerRuntime:
             "has_new_data": bool(fresh_timeframes),
             "validated_timeframes": fresh_timeframes,
             "no_new_data_timeframes": no_new_data_timeframes,
+            "historical_timeframes": {
+                timeframe: len(histories[timeframe])
+                for timeframe in SUPPORTED_TIMEFRAMES
+            },
+            "history_freshness": history_freshness,
             "accepted_records": accepted_total,
             "rejected_records": rejected_total,
         }
 
     def _analysis_is_ready(self) -> bool:
         with self._state_lock:
+            if self._cycle_state.get("validation_passed") is not True:
+                return False
+
+            histories = self._cycle_state.get(
+                "historical_candles",
+                {},
+            )
+
+            freshness = self._cycle_state.get(
+                "history_freshness",
+                {},
+            )
+
             return (
-                self._cycle_state.get("validation_passed") is True
-                and "1h"
-                in self._cycle_state.get(
-                    "fresh_timeframes",
-                    [],
+                isinstance(histories, Mapping)
+                and isinstance(
+                    histories.get("1h"),
+                    pd.DataFrame,
                 )
+                and not histories["1h"].empty
+                and freshness.get("1h") is True
             )
 
     def _task_market_analysis(self) -> dict[str, Any]:
         if not self._analysis_is_ready():
             return {
                 "status": "SKIPPED",
-                "reason": "NO_NEW_VALIDATED_1H_CANDLES",
+                "reason": "NO_FRESH_VALIDATED_1H_HISTORY",
             }
 
         with self._state_lock:
             candles = self._cycle_state[
-                "accepted_candles"
-            ].get("1h")
+                "historical_candles"
+            ]["1h"].copy(deep=True)
 
             timestamp = self._cycle_state["timestamp"]
-
-        if candles is None or candles.empty:
-            raise SchedulerRuntimeError(
-                "Fresh validated 1h candles are unavailable."
-            )
 
         from market_analysis.engine import analyze_market
         from reports.market_report import generate_market_report
 
         try:
             analysis = analyze_market(
-                data=candles.copy(deep=True),
+                data=candles,
                 analysis_time=timestamp,
             )
 
@@ -899,6 +1109,8 @@ class SchedulerRuntime:
             "status": "SUCCESS",
             "pair": self.pair,
             "timeframe": "1h",
+            "input_mode": "FULL_PERSISTED_HISTORY",
+            "input_candles": len(candles),
             "report_type": report.get("report_type"),
             "generated_at": report.get("generated_at"),
         }
@@ -907,7 +1119,7 @@ class SchedulerRuntime:
         if not self._analysis_is_ready():
             return {
                 "status": "SKIPPED",
-                "reason": "NO_NEW_VALIDATED_1H_CANDLES",
+                "reason": "NO_FRESH_VALIDATED_1H_HISTORY",
             }
 
         with self._state_lock:
@@ -963,7 +1175,7 @@ class SchedulerRuntime:
         if not self._analysis_is_ready():
             return {
                 "status": "SKIPPED",
-                "reason": "NO_NEW_VALIDATED_1H_CANDLES",
+                "reason": "NO_FRESH_VALIDATED_1H_HISTORY",
             }
 
         trader_schedule = _mapping(
@@ -975,6 +1187,16 @@ class SchedulerRuntime:
             market_analysis_passed = self._cycle_state.get(
                 "market_analysis_passed"
             )
+
+            candle_data = {
+                timeframe: candles.copy(deep=True)
+                for timeframe, candles
+                in self._cycle_state[
+                    "historical_candles"
+                ].items()
+            }
+
+            timestamp = self._cycle_state["timestamp"]
 
         if (
             trader_schedule.get("run_after_market_analysis") is True
@@ -992,6 +1214,8 @@ class SchedulerRuntime:
                 pair=self.pair,
                 leverage=self.leverage,
                 account_equity=self.account_equity,
+                analysis_time=timestamp,
+                candle_data=candle_data,
             )
         except Exception as exc:
             raise SchedulerRuntimeError(
@@ -1030,6 +1254,11 @@ class SchedulerRuntime:
             "status": "SUCCESS",
             "pair": self.pair,
             "signal": result.get("signal"),
+            "data_mode": result.get("data_mode"),
+            "analysis_timestamp": result.get(
+                "analysis_timestamp"
+            ),
+            "candle_counts": result.get("candle_counts"),
             "manual_review_only": True,
             "auto_trading": False,
             "exchange_connection": False,
@@ -1090,6 +1319,22 @@ class SchedulerRuntime:
                 self._cycle_state["fresh_timeframes"]
             )
 
+            history_freshness = dict(
+                self._cycle_state.get(
+                    "history_freshness",
+                    {},
+                )
+            )
+
+            historical_counts = {
+                timeframe: len(candles)
+                for timeframe, candles
+                in self._cycle_state.get(
+                    "historical_candles",
+                    {},
+                ).items()
+            }
+
         result["runtime"] = {
             "pair": self.pair,
             "timestamp": timestamp.isoformat(),
@@ -1102,6 +1347,8 @@ class SchedulerRuntime:
 
         result["candle_collection"] = candle_results
         result["fresh_timeframes"] = fresh_timeframes
+        result["historical_candle_counts"] = historical_counts
+        result["history_freshness"] = history_freshness
 
         return result
 
