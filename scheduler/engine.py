@@ -456,6 +456,35 @@ class SchedulerEngine:
                 f"Unable to write scheduler history: {exc}"
             ) from exc
 
+    def _persist_record(
+        self,
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Persist a task record without repeating its callback.
+
+        A history failure is reported in the returned record.
+        It never causes the original task callback to run again.
+        """
+
+        try:
+            self._record_history(record)
+
+        except SchedulerError as exc:
+            record["history_error"] = str(exc)
+
+            original_status = record.get("status", "FAILED")
+            record["callback_status"] = original_status
+            record["status"] = "FAILED"
+
+            if "error" not in record:
+                record["error"] = (
+                    "Task callback completed, but execution "
+                    "history could not be saved."
+                )
+
+        return record
+
     @staticmethod
     def _safe_result(value: Any) -> Any:
         try:
@@ -499,7 +528,6 @@ class SchedulerEngine:
         if normalized in SUCCESS_STATUSES:
             return "SUCCESS"
 
-        # Unknown status values are not silently treated as success.
         raise SchedulerError(
             f"Unsupported callback status: {status!r}."
         )
@@ -512,10 +540,17 @@ class SchedulerEngine:
         callback = self.tasks.get(task_name)
 
         if callback is None:
-            raise SchedulerError(
-                f"No callback registered for enabled task "
-                f"'{task_name}'."
-            )
+            record = {
+                "task": task_name,
+                "status": "FAILED",
+                "attempt": 0,
+                "error": (
+                    f"No callback registered for enabled task "
+                    f"'{task_name}'."
+                ),
+            }
+
+            return self._persist_record(record)
 
         execution = self.config["execution"]
 
@@ -542,29 +577,29 @@ class SchedulerEngine:
                         f"Task '{task_name}' returned FAILED."
                     )
 
-                finished_at = _normalize_timestamp(
-                    self.clock()
-                )
-
-                record = {
-                    "task": task_name,
-                    "status": task_status,
-                    "attempt": attempt + 1,
-                    "started_at": started_at.isoformat(),
-                    "finished_at": finished_at.isoformat(),
-                    "result": self._safe_result(result),
-                }
-
-                # History errors must not cause a callback to be
-                # repeated, because the callback may have side effects.
-                self._record_history(record)
-
-                self._last_runs[task_name] = timestamp
-
-                return record
-
             except Exception as exc:
                 last_error = exc
+                continue
+
+            # The callback has completed successfully or has
+            # explicitly skipped. Do not put history persistence
+            # inside the retry block.
+            finished_at = _normalize_timestamp(self.clock())
+
+            record = {
+                "task": task_name,
+                "status": task_status,
+                "attempt": attempt + 1,
+                "started_at": started_at.isoformat(),
+                "finished_at": finished_at.isoformat(),
+                "result": self._safe_result(result),
+            }
+
+            # Record the run before attempting history persistence.
+            # A history error must not cause the callback to repeat.
+            self._last_runs[task_name] = timestamp
+
+            return self._persist_record(record)
 
         finished_at = _normalize_timestamp(self.clock())
 
@@ -579,9 +614,7 @@ class SchedulerEngine:
             ),
         }
 
-        self._record_history(record)
-
-        return record
+        return self._persist_record(record)
 
     def run_cycle(
         self,
@@ -676,9 +709,6 @@ class SchedulerEngine:
             if item["task"] in ("market_data", "candles")
         ]
 
-        # Validation requires at least one successful candle
-        # collection in this cycle. A NO_NEW_DATA result does not
-        # authorize downstream engines to process stale data.
         candle_collection_succeeded = any(
             item["status"] == "SUCCESS"
             for item in collection_records
@@ -766,8 +796,6 @@ class SchedulerEngine:
             for item in records
         )
 
-        # Every downstream engine requires successful validation
-        # in the current cycle. No stale validation result is reused.
         if not validation_succeeded:
             return self._cycle_result(
                 timestamp,
