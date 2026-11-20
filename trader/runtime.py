@@ -1,11 +1,9 @@
+
 """End-to-end runtime for Kraken-based Bitcoin trading signals.
 
-This runtime coordinates:
-1. Kraken public OHLCV collection.
-2. Candle validation and raw-data persistence.
-3. Loading complete historical candle datasets.
-4. Trading pipeline execution.
-5. Signal and rejection persistence.
+This runtime supports two data modes:
+1. Standalone mode: collect Kraken candles and load full history.
+2. Shared mode: reuse validated historical candles supplied by scheduler.
 
 No private exchange API is used.
 No orders are submitted.
@@ -17,6 +15,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 from collectors.kraken_ohlcv import TIMEFRAME_MINUTES
 from collectors.pipeline import (
@@ -302,9 +302,6 @@ def _collect_all_timeframes(
                 f"Unsupported runtime timeframe: {timeframe}"
             )
 
-        # Each timeframe receives its own age allowance.
-        # This prevents valid 1h and 4h candles from being
-        # incorrectly rejected by the 5m freshness window.
         maximum_age = (
             interval_minutes + grace_minutes
         )
@@ -371,10 +368,78 @@ def _collect_all_timeframes(
     return results
 
 
+def _prepare_shared_candle_data(
+    candle_data: dict[str, pd.DataFrame],
+) -> tuple[
+    dict[str, pd.DataFrame],
+    dict[str, dict[str, Any]],
+]:
+    """Validate the structure of scheduler-supplied candle history.
+
+    Detailed candle, continuity and freshness validation remains
+    the responsibility of TradingPipeline.
+    """
+
+    if not isinstance(candle_data, dict):
+        raise TradingRuntimeError(
+            "Shared candle_data must be a dictionary."
+        )
+
+    supplied_timeframes = set(candle_data)
+    required_timeframes = set(TRADING_TIMEFRAMES)
+
+    if supplied_timeframes != required_timeframes:
+        missing = sorted(
+            required_timeframes - supplied_timeframes
+        )
+
+        unknown = sorted(
+            supplied_timeframes - required_timeframes
+        )
+
+        raise TradingRuntimeError(
+            "Invalid shared candle timeframes. "
+            f"Missing: {missing}; unsupported: {unknown}."
+        )
+
+    prepared: dict[str, pd.DataFrame] = {}
+    collection_report: dict[str, dict[str, Any]] = {}
+
+    for timeframe in TRADING_TIMEFRAMES:
+
+        candles = candle_data[timeframe]
+
+        if not isinstance(candles, pd.DataFrame):
+            raise TradingRuntimeError(
+                f"Shared {timeframe} candles must be a DataFrame."
+            )
+
+        if candles.empty:
+            raise TradingRuntimeError(
+                f"Shared {timeframe} candle history is empty."
+            )
+
+        prepared[timeframe] = candles.copy(deep=True)
+
+        collection_report[timeframe] = {
+            "status": "REUSED_HISTORY",
+            "timeframe": timeframe,
+            "collected_records": 0,
+            "accepted_records": len(candles),
+            "message": (
+                "Reused scheduler-provided historical candles; "
+                "no additional Kraken collection was performed."
+            ),
+        }
+
+    return prepared, collection_report
+
+
 def run_trading_runtime(
     pair: str = "XBTUSD",
     *,
     analysis_time: datetime | None = None,
+    candle_data: dict[str, pd.DataFrame] | None = None,
     data_dir: str | Path | None = None,
     report_path: str | Path | None = None,
     history_path: str | Path | None = None,
@@ -385,14 +450,21 @@ def run_trading_runtime(
 ) -> dict[str, Any]:
     """Run the complete Kraken-to-trading-signal workflow.
 
-    The runtime:
-    - Collects newly closed Kraken candles.
-    - Validates every timeframe.
-    - Loads complete persisted candle histories.
-    - Generates and persists a trading signal.
-    - Returns a structured execution report.
+    When candle_data is omitted:
+    - Collect newly closed Kraken candles.
+    - Validate every timeframe.
+    - Load complete persisted candle histories.
 
-    It never uses private Kraken endpoints and never executes orders.
+    When candle_data is supplied:
+    - Reuse the supplied complete historical datasets.
+    - Do not perform another Kraken collection.
+    - Let TradingPipeline perform detailed candle and freshness checks.
+
+    Both modes generate and persist a trading signal using the
+    same analysis timestamp.
+
+    This runtime never uses private Kraken endpoints and never
+    executes orders.
     """
 
     normalized_pair = _normalize_pair(pair)
@@ -430,7 +502,7 @@ def run_trading_runtime(
         rejection_path,
     )
 
-    configuration = _load_runtime_configuration()
+    _load_runtime_configuration()
 
     try:
         paths["data"].mkdir(
@@ -459,46 +531,62 @@ def run_trading_runtime(
         ) from exc
 
     # --------------------------------------------------
-    # STEP 1: Collect and validate all Kraken timeframes.
+    # STEP 1: Select the candle data source.
     # --------------------------------------------------
 
-    collection_results = _collect_all_timeframes(
-        pair=normalized_pair,
-        data_dir=paths["data"],
-        report_path=paths["report"],
-        collection_time=timestamp,
-        timeout=normalized_timeout,
-        grace_minutes=configuration[
-            "freshness_grace_minutes"
-        ],
-    )
+    if candle_data is None:
 
-    # --------------------------------------------------
-    # STEP 2: Load complete persisted candle histories.
-    # --------------------------------------------------
-
-    try:
-        candle_data = load_trading_candles(
+        # Standalone mode: collect all configured timeframes.
+        collection_results = _collect_all_timeframes(
             pair=normalized_pair,
             data_dir=paths["data"],
+            report_path=paths["report"],
+            collection_time=timestamp,
+            timeout=normalized_timeout,
+            grace_minutes=_load_runtime_configuration()[
+                "freshness_grace_minutes"
+            ],
         )
 
-    except (
-        TradingDataLoaderError,
-        ValueError,
-        OSError,
-    ) as exc:
-        raise TradingRuntimeError(
-            f"Unable to load complete Kraken candle history: {exc}"
-        ) from exc
+        # Load complete persisted history after collection.
+        try:
+            prepared_candle_data = load_trading_candles(
+                pair=normalized_pair,
+                data_dir=paths["data"],
+            )
+
+        except (
+            TradingDataLoaderError,
+            ValueError,
+            OSError,
+        ) as exc:
+            raise TradingRuntimeError(
+                f"Unable to load complete Kraken candle history: {exc}"
+            ) from exc
+
+    else:
+
+        # Scheduler mode: reuse its shared historical datasets.
+        prepared_candle_data, collection_results = (
+            _prepare_shared_candle_data(
+                candle_data
+            )
+        )
+
+    # --------------------------------------------------
+    # STEP 2: Verify that complete history is available.
+    # --------------------------------------------------
 
     candle_counts = {}
 
     for timeframe in TRADING_TIMEFRAMES:
 
-        candles = candle_data.get(timeframe)
+        candles = prepared_candle_data.get(timeframe)
 
-        if candles is None or candles.empty:
+        if (
+            not isinstance(candles, pd.DataFrame)
+            or candles.empty
+        ):
             raise TradingRuntimeError(
                 f"No historical candles available for {timeframe}."
             )
@@ -511,7 +599,7 @@ def run_trading_runtime(
 
     try:
         trading_result = run_trading_pipeline(
-            candle_data,
+            prepared_candle_data,
             analysis_time=timestamp,
             account_equity=account_equity,
             leverage=normalized_leverage,
@@ -573,6 +661,11 @@ def run_trading_runtime(
         "runtime_status": "SUCCESS",
         "pair": normalized_pair,
         "analysis_timestamp": timestamp.isoformat(),
+        "data_mode": (
+            "SHARED_HISTORY"
+            if candle_data is not None
+            else "STANDALONE_COLLECTION"
+        ),
         "collection": collection_results,
         "candle_counts": candle_counts,
         "signal": signal,
