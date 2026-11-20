@@ -518,8 +518,18 @@ def run_trader(
     pair: str = "XBTUSD",
     leverage: float = 1.0,
     account_equity: float | None = None,
+    analysis_time: datetime | None = None,
+    candle_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run the manual-review-only trading signal runtime."""
+    """Run the manual-review-only trading signal runtime.
+
+    Optional scheduler inputs:
+    - analysis_time: shared UTC timestamp for the current cycle.
+    - candle_data: complete historical candle datasets already collected
+      and validated by the scheduler.
+
+    When candle_data is omitted, standalone collection remains enabled.
+    """
 
     from trader.runtime import (
         TradingRuntimeError,
@@ -544,11 +554,23 @@ def run_trader(
             "account_equity",
         )
 
+    runtime_arguments = {
+        "pair": normalized_pair,
+        "leverage": normalized_leverage,
+        "account_equity": account_equity,
+    }
+
+    # Preserve the original call contract for standalone execution.
+    # Scheduler arguments are forwarded only when explicitly supplied.
+    if analysis_time is not None:
+        runtime_arguments["analysis_time"] = analysis_time
+
+    if candle_data is not None:
+        runtime_arguments["candle_data"] = candle_data
+
     try:
         result = run_trading_runtime(
-            pair=normalized_pair,
-            leverage=normalized_leverage,
-            account_equity=account_equity,
+            **runtime_arguments,
         )
 
     except (
