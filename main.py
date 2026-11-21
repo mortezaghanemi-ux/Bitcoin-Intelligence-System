@@ -194,6 +194,7 @@ def run_collection(
 
     from collectors.pipeline import (
         KrakenPipelineError,
+        DEFAULT_PROCESSED_DIR,
         run_kraken_pipeline,
     )
 
@@ -257,6 +258,7 @@ def run_collection(
             result = run_kraken_pipeline(
                 pair=normalized_pair,
                 timeframe=timeframe,
+                processed_dir=DEFAULT_PROCESSED_DIR,
             )
 
             if not isinstance(result, dict):
@@ -605,7 +607,153 @@ def run_trader(
             "Trading safety verification failed."
         )
 
+    # Attach the measured historical win rate that matches this signal.
+    # This is read-only context; it never changes the signal itself.
+    from backtesting.performance import (
+        load_latest_performance,
+        lookup_signal_performance,
+    )
+
+    signal = result.get("signal")
+
+    if isinstance(signal, dict) and signal.get("signal") in {
+        "LONG",
+        "SHORT",
+    }:
+        result["historical_performance"] = lookup_signal_performance(
+            load_latest_performance(),
+            signal,
+        )
+
     return result
+
+
+def run_import_history(
+    csv_path: str,
+    pair: str = "XBTUSD",
+    output_dir: str | None = None,
+) -> dict[str, Any]:
+    """Convert a Kraken 5m CSV file into backtesting history files."""
+
+    from backtesting.importer import (
+        HistoryImportError,
+        import_kraken_history,
+    )
+
+    try:
+        result = import_kraken_history(
+            csv_path,
+            pair=_validate_pair(pair),
+            output_dir=output_dir,
+        )
+
+    except HistoryImportError as exc:
+        raise ApplicationError(
+            f"History import failed: {exc}"
+        ) from exc
+
+    result["status"] = "SUCCESS"
+
+    return result
+
+
+def run_backtest_evaluation(
+    pair: str = "XBTUSD",
+    data_dir: str | None = None,
+    target: int = 1,
+    decision_step: int = 12,
+    last_days: float | None = None,
+    minimum_sample: int = 30,
+) -> dict[str, Any]:
+    """Run a backtest on stored history and save the win-rate report."""
+
+    import pandas as pd
+
+    from backtesting.data import (
+        BacktestingDataError,
+        load_backtest_data,
+    )
+    from backtesting.engine import BacktestingEngineError
+    from backtesting.importer import DEFAULT_HISTORY_DIR
+    from backtesting.performance import (
+        PerformanceError,
+        run_performance_evaluation,
+        save_performance_report,
+    )
+
+    if target not in (1, 2, 3):
+        raise ApplicationError("target must be 1, 2 or 3 (TP1-TP3).")
+
+    normalized_pair = _validate_pair(pair)
+
+    # Prefer imported long history; fall back to collected raw data.
+    directory = (
+        data_dir
+        if data_dir is not None
+        else (
+            str(DEFAULT_HISTORY_DIR)
+            if (
+                DEFAULT_HISTORY_DIR
+                / f"kraken_{normalized_pair}_5m.jsonl"
+            ).is_file()
+            else None
+        )
+    )
+
+    start_time = None
+
+    try:
+        if last_days is not None:
+            probe = load_backtest_data(
+                pair=normalized_pair,
+                data_dir=directory,
+            )
+            start_time = probe["5m"]["close_time"].iloc[-1] - (
+                pd.Timedelta(days=last_days)
+            )
+
+        data = load_backtest_data(
+            pair=normalized_pair,
+            data_dir=directory,
+            start_time=start_time,
+        )
+
+        report = run_performance_evaluation(
+            data,
+            pair=normalized_pair,
+            target_index=target - 1,
+            decision_step=decision_step,
+            minimum_sample=minimum_sample,
+        )
+
+        path = save_performance_report(report)
+
+    except (
+        BacktestingDataError,
+        BacktestingEngineError,
+        PerformanceError,
+        ValueError,
+        OSError,
+    ) as exc:
+        raise ApplicationError(
+            f"Backtest failed: {exc}"
+        ) from exc
+
+    return {
+        "status": "SUCCESS",
+        "report_file": str(path),
+        "data_directory": directory or "data/raw/market/ohlcv",
+        "period": report["period"],
+        "target": report["target"],
+        "overall": report["overall"],
+        "out_of_sample": report["out_of_sample"],
+        "by_direction": report["by_direction"],
+        "by_confidence": report["by_confidence"],
+        "risk": report["risk"],
+        "note": (
+            "Measured on past data by simulation; not a prediction."
+        ),
+    }
 
 
 def run_dashboard(
@@ -727,6 +875,42 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
     )
 
+    import_parser = subparsers.add_parser(
+        "import-history",
+        help="Import a Kraken 5m OHLCVT CSV file for backtesting.",
+    )
+
+    import_parser.add_argument("csv_path")
+    import_parser.add_argument("--pair", default="XBTUSD")
+    import_parser.add_argument("--output-dir", default=None)
+
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        help="Measure past signal win rate and save the report.",
+    )
+
+    backtest_parser.add_argument("--pair", default="XBTUSD")
+    backtest_parser.add_argument("--data-dir", default=None)
+    backtest_parser.add_argument(
+        "--target",
+        type=int,
+        default=1,
+        choices=(1, 2, 3),
+        help="Which take-profit counts as a win (1=TP1).",
+    )
+    backtest_parser.add_argument(
+        "--step",
+        type=int,
+        default=12,
+        help="Check for a signal every N five-minute candles.",
+    )
+    backtest_parser.add_argument(
+        "--last-days",
+        type=float,
+        default=None,
+        help="Use only the most recent N days of history.",
+    )
+
     dashboard_parser = subparsers.add_parser(
         "dashboard",
         help="Start the read-only local dashboard.",
@@ -793,6 +977,22 @@ def main(
                 pair=arguments.pair,
                 leverage=arguments.leverage,
                 account_equity=arguments.account_equity,
+            )
+
+        elif arguments.command == "import-history":
+            result = run_import_history(
+                csv_path=arguments.csv_path,
+                pair=arguments.pair,
+                output_dir=arguments.output_dir,
+            )
+
+        elif arguments.command == "backtest":
+            result = run_backtest_evaluation(
+                pair=arguments.pair,
+                data_dir=arguments.data_dir,
+                target=arguments.target,
+                decision_step=arguments.step,
+                last_days=arguments.last_days,
             )
 
         elif arguments.command == "dashboard":

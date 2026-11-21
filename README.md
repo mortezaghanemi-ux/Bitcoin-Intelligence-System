@@ -25,6 +25,19 @@ An independent Bitcoin intelligence platform combining:
 
 Development phase: Initial Architecture
 
+## Commands
+
+- `python main.py collect` collects and validates candles.
+- `python main.py trader` generates a manual-review signal. It shows
+  the measured historical win rate for that kind of signal.
+- `python main.py import-history FILE.csv` imports Kraken history.
+- `python main.py backtest` measures past win rate (see
+  `backtesting/README.md`).
+- `python main.py dashboard` starts the read-only dashboard.
+
+Win rates shown by the system are measured on past data by simulation.
+They are not predictions.
+
 ## Technology
 
 - Python

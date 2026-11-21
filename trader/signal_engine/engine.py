@@ -944,7 +944,18 @@ class TradingSignalEngine:
         risk_fraction: float = 0.005,
         maintenance_margin_rate: float = 0.005,
         execution_timeframe: str = "5m",
+        analysis_window: int | None = 120,
     ) -> None:
+        if analysis_window is not None and (
+            isinstance(analysis_window, bool)
+            or not isinstance(analysis_window, int)
+            or analysis_window < minimum_candles
+        ):
+            raise TradingSignalEngineError(
+                "analysis_window must be None or an integer "
+                "not smaller than minimum_candles."
+            )
+
         _validate_parameters(
             minimum_candles,
             minimum_confidence,
@@ -970,6 +981,12 @@ class TradingSignalEngine:
             maintenance_margin_rate
         )
         self.execution_timeframe = execution_timeframe
+
+        # Only the newest candles of each timeframe are analysed. This
+        # keeps live signals and backtests identical by construction,
+        # makes results independent of how much history is stored, and
+        # keeps analysis time bounded.
+        self.analysis_window = analysis_window
 
         self._history: list[dict[str, Any]] = []
         self._known_ids: set[str] = set()
@@ -1030,6 +1047,14 @@ class TradingSignalEngine:
             timestamp,
             self.minimum_candles,
         )
+
+        if self.analysis_window is not None:
+            candles_by_timeframe = {
+                timeframe: frame.tail(
+                    self.analysis_window
+                ).reset_index(drop=True)
+                for timeframe, frame in candles_by_timeframe.items()
+            }
 
         if account_equity is not None and (
             isinstance(account_equity, bool)
@@ -1275,95 +1300,93 @@ class TradingSignalEngine:
                         "Position risk calculation returned an invalid liquidation report."
                     )
 
-                if account_equity is None:
-                    raise TradingSignalEngineError(
-                        "Account equity is required to generate LONG or SHORT signals."
-                    )
-
-                if position.get("status") != "CALCULATED":
-                    raise TradingSignalEngineError(
-                        "Position sizing was not successfully calculated."
-                    )
-
-                required_position_fields = (
-                    "account_equity",
-                    "risk_fraction",
-                    "risk_amount",
-                    "quantity_btc",
-                    "notional_value",
-                    "required_margin",
-                    "leverage",
-                )
-
-                position_values = {}
-
-                for field in required_position_fields:
-                    value = _safe_float(position.get(field))
-
-                    if value is None or value <= 0:
+                # Position sizing is optional: it is validated only when
+                # an account equity value was supplied.
+                if account_equity is not None:
+                    if position.get("status") != "CALCULATED":
                         raise TradingSignalEngineError(
-                            f"Position risk field '{field}' is missing or invalid."
+                            "Position sizing was not successfully calculated."
                         )
 
-                    position_values[field] = value
-
-                if not math.isclose(
-                    position_values["account_equity"],
-                    float(account_equity),
-                    rel_tol=1e-8,
-                    abs_tol=1e-8,
-                ):
-                    raise TradingSignalEngineError(
-                        "Calculated account equity does not match supplied equity."
+                    required_position_fields = (
+                        "account_equity",
+                        "risk_fraction",
+                        "risk_amount",
+                        "quantity_btc",
+                        "notional_value",
+                        "required_margin",
+                        "leverage",
                     )
 
-                if not math.isclose(
-                    position_values["risk_fraction"],
-                    self.risk_fraction,
-                    rel_tol=1e-8,
-                    abs_tol=1e-10,
-                ):
-                    raise TradingSignalEngineError(
-                        "Calculated risk fraction does not match configured risk."
+                    position_values = {}
+
+                    for field in required_position_fields:
+                        value = _safe_float(position.get(field))
+
+                        if value is None or value <= 0:
+                            raise TradingSignalEngineError(
+                                f"Position risk field '{field}' is missing or invalid."
+                            )
+
+                        position_values[field] = value
+
+                    if not math.isclose(
+                        position_values["account_equity"],
+                        float(account_equity),
+                        rel_tol=1e-8,
+                        abs_tol=1e-8,
+                    ):
+                        raise TradingSignalEngineError(
+                            "Calculated account equity does not match supplied equity."
+                        )
+
+                    if not math.isclose(
+                        position_values["risk_fraction"],
+                        self.risk_fraction,
+                        rel_tol=1e-8,
+                        abs_tol=1e-10,
+                    ):
+                        raise TradingSignalEngineError(
+                            "Calculated risk fraction does not match configured risk."
+                        )
+
+                    if not math.isclose(
+                        position_values["leverage"],
+                        float(leverage),
+                        rel_tol=1e-8,
+                        abs_tol=1e-8,
+                    ):
+                        raise TradingSignalEngineError(
+                            "Calculated leverage does not match requested leverage."
+                        )
+
+                    if position_values["leverage"] > self.maximum_leverage:
+                        raise TradingSignalEngineError(
+                            "Calculated leverage exceeds the configured maximum."
+                        )
+
+                    if (
+                        position_values["required_margin"]
+                        > position_values["account_equity"]
+                    ):
+                        raise TradingSignalEngineError(
+                            "Required margin exceeds available account equity."
+                        )
+
+                    expected_risk_amount = (
+                        position_values["account_equity"]
+                        * position_values["risk_fraction"]
                     )
 
-                if not math.isclose(
-                    position_values["leverage"],
-                    float(leverage),
-                    rel_tol=1e-8,
-                    abs_tol=1e-8,
-                ):
-                    raise TradingSignalEngineError(
-                        "Calculated leverage does not match requested leverage."
-                    )
-
-                if position_values["leverage"] > self.maximum_leverage:
-                    raise TradingSignalEngineError(
-                        "Calculated leverage exceeds the configured maximum."
-                    )
-
-                if (
-                    position_values["required_margin"]
-                    > position_values["account_equity"]
-                ):
-                    raise TradingSignalEngineError(
-                        "Required margin exceeds available account equity."
-                    )
-
-                expected_risk_amount = (
-                    position_values["account_equity"]
-                    * position_values["risk_fraction"]
-                )
-
-                if not math.isclose(
-                    position_values["risk_amount"],
-                    expected_risk_amount,
-                    rel_tol=1e-6,
-                    abs_tol=1e-8,
-                ):
-                    raise TradingSignalEngineError(
-                        "Calculated risk amount is inconsistent with account equity."
-                    )
+                    if not math.isclose(
+                        position_values["risk_amount"],
+                        expected_risk_amount,
+                        rel_tol=1e-6,
+                        abs_tol=1e-8,
+                    ):
+                        raise TradingSignalEngineError(
+                            "Calculated risk amount is inconsistent with account equity."
+                        )
 
                 if liquidation.get("status") != "ESTIMATE_ONLY":
                     raise TradingSignalEngineError(

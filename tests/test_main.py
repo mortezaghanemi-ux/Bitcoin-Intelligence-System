@@ -271,7 +271,7 @@ def collection_configuration():
 def test_run_collection_returns_success(monkeypatch):
     calls = []
 
-    def fake_pipeline(*, pair, timeframe):
+    def fake_pipeline(*, pair, timeframe, **_ignored):
         calls.append((pair, timeframe))
 
         return {

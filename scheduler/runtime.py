@@ -484,7 +484,10 @@ class SchedulerRuntime:
         self,
         timeframe: str,
     ) -> dict[str, Any]:
-        from collectors.pipeline import run_kraken_pipeline
+        from collectors.pipeline import (
+            DEFAULT_PROCESSED_DIR,
+            run_kraken_pipeline,
+        )
 
         with self._state_lock:
             timestamp = self._cycle_state["timestamp"]
@@ -494,6 +497,7 @@ class SchedulerRuntime:
                 pair=self.pair,
                 timeframe=timeframe,
                 collection_time=timestamp,
+                processed_dir=DEFAULT_PROCESSED_DIR,
             )
         except Exception as exc:
             with self._state_lock:

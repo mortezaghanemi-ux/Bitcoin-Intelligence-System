@@ -8,3 +8,5 @@ venv/
 .DS_Store
 Thumbs.db
 *.log
+# Large imported historical candles (re-creatable with `import-history`)
+data/history/

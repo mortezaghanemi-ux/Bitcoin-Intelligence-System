@@ -932,7 +932,7 @@ def test_generates_bearish_signal(monkeypatch):
     assert result["risk_calculation"]["position"]["status"] == "CALCULATED"
 
 
-def test_bearish_signal_without_equity_is_rejected(monkeypatch):
+def test_bearish_signal_without_equity_is_still_generated(monkeypatch):
     install_mock_analyzers(
         monkeypatch,
         direction="BEARISH",
@@ -945,14 +945,17 @@ def test_bearish_signal_without_equity_is_rejected(monkeypatch):
         analysis_time=CHECK_TIME,
     )
 
-    assert result["signal"] == "NO_TRADE"
+    assert result["signal"] == "SHORT"
     assert result["direction"] == "BEARISH"
-    assert result["status"] == "REJECTED"
+    assert result["status"] == "REQUIRES_MANUAL_REVIEW"
 
-    assert result["entry_range"] is None
-    assert result["stop_loss"] is None
-    assert result["risk_calculation"] is None
-    assert result["rejection_reasons"]
+    assert result["entry_range"] is not None
+    assert result["stop_loss"] is not None
+    assert result["take_profit"]
+
+    position = result["risk_calculation"]["position"]
+    assert position["status"] == "NOT_CALCULATED"
+    assert position["quantity_btc"] is None
 
 
 def test_neutral_direction_produces_no_trade(monkeypatch):

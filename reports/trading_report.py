@@ -514,64 +514,82 @@ def _validate_risk_calculation(
             "Position calculation is missing."
         )
 
-    if position.get("status") != "CALCULATED":
-        raise TradingReportError(
-            "Position sizing must have CALCULATED status."
+    position_status = position.get("status")
+
+    if position_status == "NOT_CALCULATED":
+        normalized_position = {
+            "status": "NOT_CALCULATED",
+            "quantity_btc": None,
+            "notional_value": None,
+            "required_margin": None,
+            "leverage": _finite_number(
+                position.get("leverage"),
+                "risk_calculation.position.leverage",
+                minimum=1,
+                maximum=2,
+            ),
+        }
+
+    elif position_status == "CALCULATED":
+        position_fields = (
+            "account_equity",
+            "risk_fraction",
+            "risk_amount",
+            "quantity_btc",
+            "notional_value",
+            "required_margin",
+            "leverage",
         )
 
-    position_fields = (
-        "account_equity",
-        "risk_fraction",
-        "risk_amount",
-        "quantity_btc",
-        "notional_value",
-        "required_margin",
-        "leverage",
-    )
+        normalized_position = {
+            field: _finite_number(
+                position.get(field),
+                f"risk_calculation.position.{field}",
+                minimum=0,
+            )
+            for field in position_fields
+        }
 
-    normalized_position = {
-        field: _finite_number(
-            position.get(field),
-            f"risk_calculation.position.{field}",
-            minimum=0,
-        )
-        for field in position_fields
-    }
+        if any(
+            normalized_position[field] <= 0
+            for field in position_fields
+        ):
+            raise TradingReportError(
+                "Position calculation values must be greater than zero."
+            )
 
-    if any(
-        normalized_position[field] <= 0
-        for field in position_fields
-    ):
-        raise TradingReportError(
-            "Position calculation values must be greater than zero."
-        )
+        if normalized_position["leverage"] > 2:
+            raise TradingReportError(
+                "Trading report leverage cannot exceed 2."
+            )
 
-    if normalized_position["leverage"] > 2:
-        raise TradingReportError(
-            "Trading report leverage cannot exceed 2."
-        )
+        if (
+            normalized_position["required_margin"]
+            > normalized_position["account_equity"]
+        ):
+            raise TradingReportError(
+                "Required margin exceeds account equity."
+            )
 
-    if (
-        normalized_position["required_margin"]
-        > normalized_position["account_equity"]
-    ):
-        raise TradingReportError(
-            "Required margin exceeds account equity."
+        expected_risk = (
+            normalized_position["account_equity"]
+            * normalized_position["risk_fraction"]
         )
 
-    expected_risk = (
-        normalized_position["account_equity"]
-        * normalized_position["risk_fraction"]
-    )
+        if not math.isclose(
+            normalized_position["risk_amount"],
+            expected_risk,
+            rel_tol=1e-6,
+            abs_tol=1e-8,
+        ):
+            raise TradingReportError(
+                "Position risk amount is inconsistent with account equity."
+            )
 
-    if not math.isclose(
-        normalized_position["risk_amount"],
-        expected_risk,
-        rel_tol=1e-6,
-        abs_tol=1e-8,
-    ):
+
+    else:
         raise TradingReportError(
-            "Position risk amount is inconsistent with account equity."
+            "Position sizing must be CALCULATED or NOT_CALCULATED."
         )
 
     if not isinstance(liquidation, dict):

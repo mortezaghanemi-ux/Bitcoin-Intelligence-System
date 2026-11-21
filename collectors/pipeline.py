@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 from collections.abc import Mapping
@@ -40,6 +41,14 @@ DEFAULT_REPORT_PATH = (
     / "data"
     / "processed"
     / "validation_reports.csv"
+)
+
+DEFAULT_PROCESSED_DIR = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "market"
+    / "ohlcv"
 )
 
 REQUIRED_COLUMNS = (
@@ -332,6 +341,70 @@ def _extract_validation_result(
     )
 
 
+def _persist_accepted_candles(
+    accepted: pd.DataFrame,
+    pair: str,
+    timeframe: str,
+    processed_dir: str | Path,
+) -> int:
+    """Append validated candles to processed storage.
+
+    Candles are deduplicated by open_time. Returns the number of
+    newly stored candles.
+    """
+
+    if accepted.empty:
+        return 0
+
+    directory = Path(processed_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    path = directory / f"kraken_{pair}_{timeframe}.jsonl"
+
+    known: set[str] = set()
+
+    if path.exists():
+        with path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                try:
+                    known.add(json.loads(line)["open_time"])
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    continue
+
+    written = 0
+
+    with path.open("a", encoding="utf-8") as file:
+        for record in accepted.to_dict(orient="records"):
+
+            row = {}
+
+            for key, value in record.items():
+                if isinstance(value, pd.Timestamp):
+                    row[key] = value.isoformat()
+                elif hasattr(value, "item"):
+                    row[key] = value.item()
+                else:
+                    row[key] = value
+
+            open_time = row.get("open_time")
+
+            if open_time in known:
+                continue
+
+            known.add(open_time)
+            file.write(
+                json.dumps(row, ensure_ascii=False, default=str)
+                + "\n"
+            )
+            written += 1
+
+        file.flush()
+
+    return written
+
+
 def run_kraken_pipeline(
     pair: str = "XBTUSD",
     timeframe: str = "5m",
@@ -341,6 +414,7 @@ def run_kraken_pipeline(
     collection_time: datetime | None = None,
     max_age_minutes: float | None = None,
     timeout: float = 15,
+    processed_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """
     Collect Kraken OHLCV data and validate new closed candles.
@@ -464,6 +538,7 @@ def run_kraken_pipeline(
             validation_time=checked_at,
             report_timestamp=datetime.now(timezone.utc),
             max_age_minutes=age_limit,
+            freshness_scope="latest",
         )
 
     except (
@@ -485,6 +560,16 @@ def run_kraken_pipeline(
     ) = _extract_validation_result(
         validation_result
     )
+
+    # Step 11b: Persist validated candles.
+
+    if processed_dir is not None:
+        _persist_accepted_candles(
+            accepted,
+            normalized_pair,
+            timeframe,
+            processed_dir,
+        )
 
     # Step 12: Determine pipeline status.
 
