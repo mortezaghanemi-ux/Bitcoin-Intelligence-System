@@ -11,7 +11,8 @@ Safety and data policies:
 - NO_NEW_DATA is a normal collection outcome.
 - Full persisted candle history is shared across analysis and trading.
 - Stale 1h history prevents market analysis.
-- Forecast reuses the market analysis from the same cycle.
+- All required trader timeframes must be fresh before trading analysis.
+- Forecast reuses market analysis from the same cycle.
 - Trading remains manual-review-only.
 - No exchange connection or order execution is permitted.
 """
@@ -193,7 +194,25 @@ class SchedulerRuntime:
         self._validate_safety()
         self._validate_configuration()
 
+        execution_config = _mapping(
+            self.schedule_config.get("execution"),
+            "schedules.execution",
+        )
+
+        self._prevent_overlapping_runs = (
+            execution_config.get("prevent_overlapping_runs") is True
+        )
+
         self._state_lock = threading.RLock()
+
+        # Protects the complete runtime cycle, including state reset.
+        self._cycle_lock = threading.Lock()
+
+        # Protects run_forever lifecycle and active stop events.
+        self._lifecycle_lock = threading.RLock()
+        self._run_forever_lock = threading.Lock()
+        self._active_stop_events: set[threading.Event] = set()
+
         self._stop_event = threading.Event()
         self._cycle_state: dict[str, Any] = {}
 
@@ -256,16 +275,39 @@ class SchedulerRuntime:
             "config.data_sources.sources",
         )
 
-    def _validate_safety(self) -> None:
+    def _get_trader_config(self) -> Mapping[str, Any]:
         trader_file = _mapping(
             self.config.get("trader"),
             "config.trader",
         )
 
-        trader = _mapping(
+        return _mapping(
             trader_file.get("trader"),
             "config.trader.trader",
         )
+
+    def _trader_timeframes(self) -> tuple[str, ...]:
+        trader = self._get_trader_config()
+        configured = trader.get("timeframes")
+
+        if (
+            not isinstance(configured, list)
+            or not configured
+            or any(
+                not isinstance(item, str)
+                or item not in SUPPORTED_TIMEFRAMES
+                for item in configured
+            )
+            or len(configured) != len(set(configured))
+        ):
+            raise SchedulerRuntimeError(
+                "Configured trader timeframes are invalid."
+            )
+
+        return tuple(configured)
+
+    def _validate_safety(self) -> None:
+        trader = self._get_trader_config()
 
         execution = _mapping(
             trader.get("execution"),
@@ -290,15 +332,12 @@ class SchedulerRuntime:
             "config.trader.trader.risk",
         )
 
-        maximum_leverage = risk.get("maximum_leverage")
-
         configured_maximum = _positive_number(
-            maximum_leverage,
+            risk.get("maximum_leverage"),
             "maximum_leverage",
         )
 
-        if configured_maximum > 2:
-            configured_maximum = 2.0
+        configured_maximum = min(configured_maximum, 2.0)
 
         if self.leverage > configured_maximum:
             raise SchedulerRuntimeError(
@@ -316,29 +355,56 @@ class SchedulerRuntime:
             "schedules.candles",
         )
 
-        timeframes = candles.get("timeframes")
+        candle_timeframes = candles.get("timeframes")
 
         if (
-            not isinstance(timeframes, list)
-            or not timeframes
+            not isinstance(candle_timeframes, list)
+            or not candle_timeframes
             or any(
                 not isinstance(item, str)
                 or item not in SUPPORTED_TIMEFRAMES
-                for item in timeframes
+                for item in candle_timeframes
             )
         ):
             raise SchedulerRuntimeError(
                 "Configured candle timeframes are invalid."
             )
 
-        if len(timeframes) != len(set(timeframes)):
+        if len(candle_timeframes) != len(set(candle_timeframes)):
             raise SchedulerRuntimeError(
                 "Duplicate candle timeframes are not allowed."
+            )
+
+        if set(candle_timeframes) != set(SUPPORTED_TIMEFRAMES):
+            raise SchedulerRuntimeError(
+                "Candle schedule must include all supported trader "
+                "timeframes: 5m, 15m, 1h and 4h."
             )
 
         if candles.get("collect_closed_candles_only") is not True:
             raise SchedulerRuntimeError(
                 "Only closed candles may be collected."
+            )
+
+        trader_timeframes = self._trader_timeframes()
+
+        if set(trader_timeframes) != set(SUPPORTED_TIMEFRAMES):
+            raise SchedulerRuntimeError(
+                "Trader configuration must include all supported "
+                "timeframes: 5m, 15m, 1h and 4h."
+            )
+
+        execution = _mapping(
+            self.schedule_config.get("execution"),
+            "schedules.execution",
+        )
+
+        if not isinstance(
+            execution.get("prevent_overlapping_runs"),
+            bool,
+        ):
+            raise SchedulerRuntimeError(
+                "prevent_overlapping_runs must be a boolean."
             )
 
     def _source_enabled(self, name: str) -> bool:
@@ -385,6 +451,7 @@ class SchedulerRuntime:
                 "collection_failures": [],
                 "validation_passed": False,
                 "fresh_timeframes": [],
+                "history_freshness": {},
                 "market_analysis": None,
                 "market_analysis_passed": False,
                 "forecast": None,
@@ -398,17 +465,8 @@ class SchedulerRuntime:
         accepted = result.get("accepted")
         rejected = result.get("rejected")
 
-        accepted_count = (
-            len(accepted)
-            if accepted is not None
-            else 0
-        )
-
-        rejected_count = (
-            len(rejected)
-            if rejected is not None
-            else 0
-        )
+        accepted_count = len(accepted) if accepted is not None else 0
+        rejected_count = len(rejected) if rejected is not None else 0
 
         with self._state_lock:
             self._cycle_state["candle_results"][timeframe] = {
@@ -417,10 +475,7 @@ class SchedulerRuntime:
                 "rejected_records": rejected_count,
             }
 
-            if result.get("status") not in (
-                "PASS",
-                "NO_NEW_DATA",
-            ):
+            if result.get("status") not in ("PASS", "NO_NEW_DATA"):
                 self._cycle_state["collection_failures"].append(
                     timeframe
                 )
@@ -431,7 +486,8 @@ class SchedulerRuntime:
     ) -> dict[str, Any]:
         from collectors.pipeline import run_kraken_pipeline
 
-        timestamp = self._cycle_state["timestamp"]
+        with self._state_lock:
+            timestamp = self._cycle_state["timestamp"]
 
         try:
             result = run_kraken_pipeline(
@@ -457,10 +513,7 @@ class SchedulerRuntime:
         status = result.get("status")
 
         if status == "NO_NEW_DATA":
-            self._record_candle_result(
-                timeframe,
-                result,
-            )
+            self._record_candle_result(timeframe, result)
 
             with self._state_lock:
                 self._cycle_state["accepted_candles"][timeframe] = None
@@ -474,44 +527,28 @@ class SchedulerRuntime:
             }
 
         if status != "PASS":
-            self._record_candle_result(
-                timeframe,
-                result,
-            )
-
+            self._record_candle_result(timeframe, result)
             raise SchedulerRuntimeError(
                 f"Kraken pipeline failed for {timeframe}: {status!r}."
             )
 
         accepted = result.get("accepted")
 
-        if accepted is None or not hasattr(accepted, "empty"):
-            self._record_candle_result(
-                timeframe,
-                result,
-            )
-
+        if accepted is None or not isinstance(accepted, pd.DataFrame):
+            self._record_candle_result(timeframe, result)
             raise SchedulerRuntimeError(
                 f"Invalid accepted candle data for {timeframe}."
             )
 
         if accepted.empty:
-            self._record_candle_result(
-                timeframe,
-                result,
-            )
-
+            self._record_candle_result(timeframe, result)
             raise SchedulerRuntimeError(
                 f"Pipeline reported PASS but returned no accepted "
                 f"candles for {timeframe}."
             )
 
         accepted_copy = accepted.copy(deep=True)
-
-        self._record_candle_result(
-            timeframe,
-            result,
-        )
+        self._record_candle_result(timeframe, result)
 
         with self._state_lock:
             self._cycle_state["accepted_candles"][timeframe] = (
@@ -526,9 +563,7 @@ class SchedulerRuntime:
                 len(accepted_copy),
             ),
             "accepted_records": len(accepted_copy),
-            "rejected_records": len(
-                result.get("rejected", [])
-            ),
+            "rejected_records": len(result.get("rejected", [])),
         }
 
     def _load_shared_history(self) -> dict[str, pd.DataFrame]:
@@ -540,10 +575,7 @@ class SchedulerRuntime:
         )
 
         try:
-            histories = load_trading_candles(
-                pair=self.pair,
-            )
-
+            histories = load_trading_candles(pair=self.pair)
         except (
             TradingDataLoaderError,
             ValueError,
@@ -634,10 +666,12 @@ class SchedulerRuntime:
     ) -> bool:
         """Check whether the latest persisted candle is fresh and closed."""
 
-        if not isinstance(candles, pd.DataFrame) or candles.empty:
-            return False
-
-        if "close_time" not in candles.columns:
+        if (
+            timeframe not in TIMEFRAME_MINUTES
+            or not isinstance(candles, pd.DataFrame)
+            or candles.empty
+            or "close_time" not in candles.columns
+        ):
             return False
 
         try:
@@ -646,16 +680,10 @@ class SchedulerRuntime:
                 errors="coerce",
             )
 
-            if close_times.isna().any():
+            if close_times.isna().any() or close_times.dt.tz is None:
                 return False
 
-            if close_times.dt.tz is None:
-                return False
-
-            if str(close_times.dt.tz) not in (
-                "UTC",
-                "UTC+00:00",
-            ):
+            if str(close_times.dt.tz) not in ("UTC", "UTC+00:00"):
                 offsets = close_times.map(
                     lambda value: value.utcoffset()
                 )
@@ -692,10 +720,7 @@ class SchedulerRuntime:
         if age < timedelta(0):
             return False
 
-        try:
-            grace = self._candle_freshness_grace_minutes()
-        except SchedulerRuntimeError:
-            raise
+        grace = self._candle_freshness_grace_minutes()
 
         maximum_age = timedelta(
             minutes=TIMEFRAME_MINUTES[timeframe] + grace
@@ -790,12 +815,13 @@ class SchedulerRuntime:
                 "Kraken Futures provider is disabled."
             )
 
-        from collectors.kraken_futures import (
-            collect_kraken_futures,
-        )
+        from collectors.kraken_futures import collect_kraken_futures
+
+        with self._state_lock:
+            timestamp = self._cycle_state["timestamp"]
 
         records = collect_kraken_futures(
-            collection_time=self._cycle_state["timestamp"],
+            collection_time=timestamp,
         )
 
         if not isinstance(records, list):
@@ -835,9 +861,7 @@ class SchedulerRuntime:
                 "reason": "ETF_SOURCE_URL_NOT_CONFIGURED",
             }
 
-        from collectors.etf_flows import (
-            collect_bitcoin_etf_flows,
-        )
+        from collectors.etf_flows import collect_bitcoin_etf_flows
 
         result = collect_bitcoin_etf_flows()
 
@@ -876,12 +900,13 @@ class SchedulerRuntime:
                 "mempool.space provider is disabled."
             )
 
-        from collectors.mempool_space import (
-            collect_mempool_space,
-        )
+        from collectors.mempool_space import collect_mempool_space
+
+        with self._state_lock:
+            timestamp = self._cycle_state["timestamp"]
 
         result = collect_mempool_space(
-            collection_time=self._cycle_state["timestamp"],
+            collection_time=timestamp,
         )
 
         if result is not None and not isinstance(result, Mapping):
@@ -916,26 +941,23 @@ class SchedulerRuntime:
 
         from collectors.macro_pipeline import run_fred_pipeline
 
+        with self._state_lock:
+            timestamp = self._cycle_state["timestamp"]
+
         result = run_fred_pipeline(
-            collection_time=self._cycle_state["timestamp"],
+            collection_time=timestamp,
         )
 
         result = _success_result(
             result,
             "FRED pipeline",
-            accepted_statuses=(
-                "SUCCESS",
-                "NO_NEW_DATA",
-            ),
+            accepted_statuses=("SUCCESS", "NO_NEW_DATA"),
         )
 
         return {
             "status": "SUCCESS",
             "provider": provider,
-            "collected_records": result.get(
-                "collected_records",
-                0,
-            ),
+            "collected_records": result.get("collected_records", 0),
             "message": result.get("message"),
         }
 
@@ -944,11 +966,9 @@ class SchedulerRuntime:
             failures = list(
                 self._cycle_state["collection_failures"]
             )
-
             candle_results = dict(
                 self._cycle_state["candle_results"]
             )
-
             timestamp = self._cycle_state["timestamp"]
 
         if failures:
@@ -980,25 +1000,33 @@ class SchedulerRuntime:
                     f"{status!r}."
                 )
 
-            accepted_count = result.get(
-                "accepted_records",
-                0,
-            )
+            accepted_count = result.get("accepted_records", 0)
 
-            if accepted_count <= 0:
+            if (
+                isinstance(accepted_count, bool)
+                or not isinstance(accepted_count, int)
+                or accepted_count <= 0
+            ):
                 raise SchedulerRuntimeError(
                     f"No accepted candles for {timeframe}."
                 )
 
             fresh_timeframes.append(timeframe)
             accepted_total += accepted_count
-            rejected_total += result.get(
-                "rejected_records",
-                0,
-            )
 
-        # Load complete persisted history after collection.
-        # NO_NEW_DATA is acceptable when valid history already exists.
+            rejected_count = result.get("rejected_records", 0)
+
+            if (
+                isinstance(rejected_count, bool)
+                or not isinstance(rejected_count, int)
+                or rejected_count < 0
+            ):
+                raise SchedulerRuntimeError(
+                    f"Invalid rejected candle count for {timeframe}."
+                )
+
+            rejected_total += rejected_count
+
         histories = self._load_shared_history()
 
         history_freshness = {
@@ -1012,13 +1040,9 @@ class SchedulerRuntime:
 
         with self._state_lock:
             self._cycle_state["validation_passed"] = True
-            self._cycle_state["fresh_timeframes"] = (
-                fresh_timeframes
-            )
+            self._cycle_state["fresh_timeframes"] = fresh_timeframes
             self._cycle_state["historical_candles"] = histories
-            self._cycle_state["history_freshness"] = (
-                history_freshness
-            )
+            self._cycle_state["history_freshness"] = history_freshness
 
         return {
             "status": "SUCCESS",
@@ -1035,6 +1059,8 @@ class SchedulerRuntime:
         }
 
     def _analysis_is_ready(self) -> bool:
+        """Market analysis and forecast require fresh validated 1h history."""
+
         with self._state_lock:
             if self._cycle_state.get("validation_passed") is not True:
                 return False
@@ -1043,21 +1069,86 @@ class SchedulerRuntime:
                 "historical_candles",
                 {},
             )
-
             freshness = self._cycle_state.get(
                 "history_freshness",
                 {},
             )
 
+            one_hour = (
+                histories.get("1h")
+                if isinstance(histories, Mapping)
+                else None
+            )
+
             return (
-                isinstance(histories, Mapping)
-                and isinstance(
-                    histories.get("1h"),
-                    pd.DataFrame,
-                )
-                and not histories["1h"].empty
+                isinstance(one_hour, pd.DataFrame)
+                and not one_hour.empty
                 and freshness.get("1h") is True
             )
+
+    def _trader_history_readiness(self) -> dict[str, Any]:
+        """Check every configured trader timeframe before trading analysis."""
+
+        with self._state_lock:
+            if self._cycle_state.get("validation_passed") is not True:
+                return {
+                    "ready": False,
+                    "reason": "DATA_VALIDATION_NOT_COMPLETED",
+                    "missing_timeframes": list(self._trader_timeframes()),
+                    "stale_timeframes": [],
+                }
+
+            histories = self._cycle_state.get(
+                "historical_candles",
+                {},
+            )
+            freshness = self._cycle_state.get(
+                "history_freshness",
+                {},
+            )
+
+            missing = []
+            stale = []
+
+            for timeframe in self._trader_timeframes():
+                candles = (
+                    histories.get(timeframe)
+                    if isinstance(histories, Mapping)
+                    else None
+                )
+
+                if not isinstance(candles, pd.DataFrame) or candles.empty:
+                    missing.append(timeframe)
+                    continue
+
+                if (
+                    not isinstance(freshness, Mapping)
+                    or freshness.get(timeframe) is not True
+                ):
+                    stale.append(timeframe)
+
+        if missing:
+            return {
+                "ready": False,
+                "reason": "TRADER_HISTORY_MISSING",
+                "missing_timeframes": missing,
+                "stale_timeframes": stale,
+            }
+
+        if stale:
+            return {
+                "ready": False,
+                "reason": "TRADER_HISTORY_STALE",
+                "missing_timeframes": [],
+                "stale_timeframes": stale,
+            }
+
+        return {
+            "ready": True,
+            "reason": None,
+            "missing_timeframes": [],
+            "stale_timeframes": [],
+        }
 
     def _task_market_analysis(self) -> dict[str, Any]:
         if not self._analysis_is_ready():
@@ -1070,7 +1161,6 @@ class SchedulerRuntime:
             candles = self._cycle_state[
                 "historical_candles"
             ]["1h"].copy(deep=True)
-
             timestamp = self._cycle_state["timestamp"]
 
         from market_analysis.engine import analyze_market
@@ -1081,11 +1171,9 @@ class SchedulerRuntime:
                 data=candles,
                 analysis_time=timestamp,
             )
-
             report = generate_market_report(
                 market_analysis=analysis,
             )
-
         except Exception as exc:
             raise SchedulerRuntimeError(
                 f"Market analysis workflow failed: {exc}"
@@ -1140,11 +1228,7 @@ class SchedulerRuntime:
                 market_analysis=analysis,
                 forecast_time=timestamp,
             )
-
-            report = generate_forecast_report(
-                forecast
-            )
-
+            report = generate_forecast_report(forecast)
         except Exception as exc:
             raise SchedulerRuntimeError(
                 f"Forecast workflow failed: {exc}"
@@ -1178,6 +1262,16 @@ class SchedulerRuntime:
                 "reason": "NO_FRESH_VALIDATED_1H_HISTORY",
             }
 
+        readiness = self._trader_history_readiness()
+
+        if not readiness["ready"]:
+            return {
+                "status": "SKIPPED",
+                "reason": readiness["reason"],
+                "missing_timeframes": readiness["missing_timeframes"],
+                "stale_timeframes": readiness["stale_timeframes"],
+            }
+
         trader_schedule = _mapping(
             self.schedule_config.get("trader"),
             "schedules.trader",
@@ -1191,9 +1285,7 @@ class SchedulerRuntime:
             candle_data = {
                 timeframe: candles.copy(deep=True)
                 for timeframe, candles
-                in self._cycle_state[
-                    "historical_candles"
-                ].items()
+                in self._cycle_state["historical_candles"].items()
             }
 
             timestamp = self._cycle_state["timestamp"]
@@ -1255,9 +1347,7 @@ class SchedulerRuntime:
             "pair": self.pair,
             "signal": result.get("signal"),
             "data_mode": result.get("data_mode"),
-            "analysis_timestamp": result.get(
-                "analysis_timestamp"
-            ),
+            "analysis_timestamp": result.get("analysis_timestamp"),
             "candle_counts": result.get("candle_counts"),
             "manual_review_only": True,
             "auto_trading": False,
@@ -1279,6 +1369,36 @@ class SchedulerRuntime:
             "trader": self._task_trader,
         }
 
+    def _runtime_metadata(self, timestamp: datetime) -> dict[str, Any]:
+        return {
+            "pair": self.pair,
+            "timestamp": timestamp.isoformat(),
+            "timezone": "UTC",
+            "manual_review_only": True,
+            "automatic_trading": False,
+            "exchange_connection": False,
+            "order_execution": False,
+        }
+
+    def _skipped_cycle_result(
+        self,
+        timestamp: datetime,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Return a consistent result when a runtime cycle is not started."""
+
+        return {
+            "status": "SKIPPED",
+            "reason": reason,
+            "timestamp": timestamp.isoformat(),
+            "tasks": [],
+            "runtime": self._runtime_metadata(timestamp),
+            "candle_collection": {},
+            "fresh_timeframes": [],
+            "historical_candle_counts": {},
+            "history_freshness": {},
+        }
+
     def run_once(
         self,
         *,
@@ -1291,66 +1411,70 @@ class SchedulerRuntime:
             )
 
         timestamp = _normalize_utc(now)
-        self._reset_cycle(timestamp)
+
+        # Do not reset shared cycle state until this run owns the lock.
+        acquired = self._cycle_lock.acquire(
+            blocking=not self._prevent_overlapping_runs
+        )
+
+        if not acquired:
+            return self._skipped_cycle_result(
+                timestamp,
+                "RUN_ALREADY_IN_PROGRESS",
+            )
 
         try:
-            result = self.engine.run_cycle(
-                now=timestamp,
-                force=force,
-            )
-        except SchedulerError as exc:
-            raise SchedulerRuntimeError(
-                f"Scheduler cycle failed: {exc}"
-            ) from exc
+            self._reset_cycle(timestamp)
 
-        if not isinstance(result, dict):
-            raise SchedulerRuntimeError(
-                "Scheduler engine returned an invalid result."
-            )
-
-        result = dict(result)
-
-        with self._state_lock:
-            candle_results = dict(
-                self._cycle_state["candle_results"]
-            )
-
-            fresh_timeframes = list(
-                self._cycle_state["fresh_timeframes"]
-            )
-
-            history_freshness = dict(
-                self._cycle_state.get(
-                    "history_freshness",
-                    {},
+            try:
+                result = self.engine.run_cycle(
+                    now=timestamp,
+                    force=force,
                 )
-            )
+            except SchedulerError as exc:
+                raise SchedulerRuntimeError(
+                    f"Scheduler cycle failed: {exc}"
+                ) from exc
 
-            historical_counts = {
-                timeframe: len(candles)
-                for timeframe, candles
-                in self._cycle_state.get(
-                    "historical_candles",
-                    {},
-                ).items()
-            }
+            if not isinstance(result, dict):
+                raise SchedulerRuntimeError(
+                    "Scheduler engine returned an invalid result."
+                )
 
-        result["runtime"] = {
-            "pair": self.pair,
-            "timestamp": timestamp.isoformat(),
-            "timezone": "UTC",
-            "manual_review_only": True,
-            "automatic_trading": False,
-            "exchange_connection": False,
-            "order_execution": False,
-        }
+            result = dict(result)
 
-        result["candle_collection"] = candle_results
-        result["fresh_timeframes"] = fresh_timeframes
-        result["historical_candle_counts"] = historical_counts
-        result["history_freshness"] = history_freshness
+            with self._state_lock:
+                candle_results = dict(
+                    self._cycle_state["candle_results"]
+                )
+                fresh_timeframes = list(
+                    self._cycle_state["fresh_timeframes"]
+                )
+                history_freshness = dict(
+                    self._cycle_state.get(
+                        "history_freshness",
+                        {},
+                    )
+                )
+                historical_counts = {
+                    timeframe: len(candles)
+                    for timeframe, candles
+                    in self._cycle_state.get(
+                        "historical_candles",
+                        {},
+                    ).items()
+                }
 
-        return result
+            result["runtime"] = self._runtime_metadata(timestamp)
+            result["candle_collection"] = candle_results
+            result["fresh_timeframes"] = fresh_timeframes
+            result["historical_candle_counts"] = historical_counts
+            result["history_freshness"] = history_freshness
+
+            return result
+
+        finally:
+            self._cycle_lock.release()
 
     def run_forever(
         self,
@@ -1374,6 +1498,20 @@ class SchedulerRuntime:
                 "stop_event must be a threading.Event."
             )
 
+        # One continuous loop per runtime instance.
+        if not self._run_forever_lock.acquire(blocking=False):
+            raise SchedulerRuntimeError(
+                "Scheduler runtime loop is already running."
+            )
+
+        with self._lifecycle_lock:
+            self._active_stop_events.add(external_stop)
+
+            # If stop() was called before this loop started, do not
+            # accidentally restart the runtime with an external event.
+            if self._stop_event.is_set():
+                external_stop.set()
+
         first_cycle = True
 
         LOGGER.info(
@@ -1382,7 +1520,10 @@ class SchedulerRuntime:
         )
 
         try:
-            while not external_stop.is_set():
+            while (
+                not external_stop.is_set()
+                and not self._stop_event.is_set()
+            ):
                 force = first_cycle and force_first_cycle
                 first_cycle = False
 
@@ -1407,10 +1548,21 @@ class SchedulerRuntime:
             LOGGER.info("Scheduler shutdown requested.")
 
         finally:
+            with self._lifecycle_lock:
+                self._active_stop_events.discard(external_stop)
+
+            self._run_forever_lock.release()
+
             LOGGER.info("Scheduler runtime stopped.")
 
     def stop(self) -> None:
+        """Stop the runtime loop, including loops using external events."""
+
         self._stop_event.set()
+
+        with self._lifecycle_lock:
+            for event in tuple(self._active_stop_events):
+                event.set()
 
     def get_history(self) -> list[dict[str, Any]]:
         try:
