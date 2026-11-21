@@ -1,4 +1,3 @@
-
 """Tests for market data source configuration and CoinGecko data behavior."""
 
 from datetime import datetime, timezone
