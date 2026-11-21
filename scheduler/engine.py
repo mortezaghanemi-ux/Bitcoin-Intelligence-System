@@ -147,10 +147,13 @@ class SchedulerEngine:
         self._lock = threading.Lock()
         self._last_runs: dict[str, datetime] = {}
 
+        # A corrupted or unreadable history file must not prevent
+        # scheduler initialization. Keep the original error so
+        # future history writes can be blocked safely.
+        self._history_restore_error: SchedulerError | None = None
+
         self._validate_configuration()
 
-        # Restore previous successful task timestamps so that
-        # scheduler intervals and duplicate protection survive restarts.
         self._restore_last_runs()
 
     @staticmethod
@@ -388,10 +391,13 @@ class SchedulerEngine:
         """
         Restore successful task timestamps from persistent history.
 
+        Corrupted or unreadable history must not prevent scheduler
+        initialization. The file is never modified or deleted here.
+
         New records use scheduled_at. Older records without that
         field use finished_at for backward compatibility.
-        Failed executions are deliberately not restored, allowing
-        a later retry.
+
+        Failed executions are deliberately not restored.
         """
 
         history_config = self.config.get("history", {})
@@ -407,7 +413,11 @@ class SchedulerEngine:
         if not self.history_path.exists():
             return
 
-        records = self.get_history()
+        try:
+            records = self.get_history()
+        except SchedulerError as exc:
+            self._history_restore_error = exc
+            return
 
         for record in records:
             task_name = record.get("task")
@@ -419,9 +429,6 @@ class SchedulerEngine:
             ):
                 continue
 
-            # A callback that completed but whose history write failed
-            # is represented as FAILED with callback_status. Do not
-            # treat it as safely persisted execution history.
             if status not in SUCCESS_STATUSES | SKIPPED_STATUSES:
                 continue
 
@@ -429,8 +436,6 @@ class SchedulerEngine:
                 record.get("scheduled_at")
             )
 
-            # Backward compatibility with history records written
-            # before scheduled_at was introduced.
             if timestamp is None:
                 timestamp = _parse_history_timestamp(
                     record.get("finished_at")
@@ -496,10 +501,7 @@ class SchedulerEngine:
         task_name: str,
         timestamp: datetime,
     ) -> bool:
-        """
-        Return True when the task already completed at this exact
-        scheduler timestamp.
-        """
+        """Return True when the task already completed at this timestamp."""
 
         if not self._duplicate_prevention_enabled():
             return False
@@ -546,6 +548,15 @@ class SchedulerEngine:
             "preserve_execution_history"
         ) is not True:
             return
+
+        # Never append to a history file that was found corrupted
+        # or unreadable during scheduler initialization.
+        if self._history_restore_error is not None:
+            raise SchedulerError(
+                "Cannot append to corrupted or unreadable scheduler "
+                "history. Repair the history file before writing "
+                "new records."
+            ) from self._history_restore_error
 
         try:
             self.history_path.parent.mkdir(
@@ -653,8 +664,6 @@ class SchedulerEngine:
         task_name: str,
         timestamp: datetime,
     ) -> dict[str, Any]:
-        # Protect all task types, including validation, analysis,
-        # forecast and trader, against duplicate execution.
         if self._has_already_run(task_name, timestamp):
             return {
                 "task": task_name,
@@ -709,9 +718,6 @@ class SchedulerEngine:
                 last_error = exc
                 continue
 
-            # The callback has completed successfully or has
-            # explicitly skipped. Record the scheduler timestamp
-            # before attempting history persistence.
             finished_at = _normalize_timestamp(self.clock())
 
             record = {
@@ -1110,6 +1116,13 @@ class SchedulerEngine:
         }
 
     def get_history(self) -> list[dict[str, Any]]:
+        """
+        Read scheduler history.
+
+        Corrupted JSONL records are reported to the caller.
+        This method never silently skips malformed records.
+        """
+
         if not self.history_path.exists():
             return []
 
