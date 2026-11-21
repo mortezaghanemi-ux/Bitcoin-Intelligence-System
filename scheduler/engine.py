@@ -69,6 +69,19 @@ def _normalize_timestamp(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _parse_history_timestamp(value: Any) -> datetime | None:
+    """Parse a persisted UTC timestamp without accepting naive values."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value)
+        return _normalize_timestamp(parsed)
+    except (ValueError, TypeError, SchedulerError):
+        return None
+
+
 def _require_mapping(value: Any, name: str) -> Mapping:
     if not isinstance(value, Mapping):
         raise SchedulerError(
@@ -135,6 +148,10 @@ class SchedulerEngine:
         self._last_runs: dict[str, datetime] = {}
 
         self._validate_configuration()
+
+        # Restore previous successful task timestamps so that
+        # scheduler intervals and duplicate protection survive restarts.
+        self._restore_last_runs()
 
     @staticmethod
     def _extract_schedule_config(
@@ -367,6 +384,66 @@ class SchedulerEngine:
                     f"trader.{key}",
                 )
 
+    def _restore_last_runs(self) -> None:
+        """
+        Restore successful task timestamps from persistent history.
+
+        New records use scheduled_at. Older records without that
+        field use finished_at for backward compatibility.
+        Failed executions are deliberately not restored, allowing
+        a later retry.
+        """
+
+        history_config = self.config.get("history", {})
+
+        if history_config.get("enabled") is not True:
+            return
+
+        if history_config.get(
+            "preserve_execution_history"
+        ) is not True:
+            return
+
+        if not self.history_path.exists():
+            return
+
+        records = self.get_history()
+
+        for record in records:
+            task_name = record.get("task")
+            status = record.get("status")
+
+            if (
+                not isinstance(task_name, str)
+                or not task_name.strip()
+            ):
+                continue
+
+            # A callback that completed but whose history write failed
+            # is represented as FAILED with callback_status. Do not
+            # treat it as safely persisted execution history.
+            if status not in SUCCESS_STATUSES | SKIPPED_STATUSES:
+                continue
+
+            timestamp = _parse_history_timestamp(
+                record.get("scheduled_at")
+            )
+
+            # Backward compatibility with history records written
+            # before scheduled_at was introduced.
+            if timestamp is None:
+                timestamp = _parse_history_timestamp(
+                    record.get("finished_at")
+                )
+
+            if timestamp is None:
+                continue
+
+            previous = self._last_runs.get(task_name)
+
+            if previous is None or timestamp > previous:
+                self._last_runs[task_name] = timestamp
+
     def _interval_for(
         self,
         task_name: str,
@@ -404,12 +481,42 @@ class SchedulerEngine:
             and section.get("enabled") is True
         )
 
+    def _duplicate_prevention_enabled(self) -> bool:
+        history_config = self.config.get("history", {})
+
+        return (
+            history_config.get("enabled") is True
+            and history_config.get(
+                "prevent_duplicate_runs"
+            ) is True
+        )
+
+    def _has_already_run(
+        self,
+        task_name: str,
+        timestamp: datetime,
+    ) -> bool:
+        """
+        Return True when the task already completed at this exact
+        scheduler timestamp.
+        """
+
+        if not self._duplicate_prevention_enabled():
+            return False
+
+        previous = self._last_runs.get(task_name)
+
+        return previous is not None and previous == timestamp
+
     def _is_due(
         self,
         task_name: str,
         now: datetime,
     ) -> bool:
         if not self._is_enabled(task_name):
+            return False
+
+        if self._has_already_run(task_name, now):
             return False
 
         interval = self._interval_for(task_name)
@@ -422,7 +529,9 @@ class SchedulerEngine:
         if previous is None:
             return True
 
-        return now - previous >= interval
+        elapsed = now - previous
+
+        return elapsed >= interval
 
     def _record_history(
         self,
@@ -544,6 +653,17 @@ class SchedulerEngine:
         task_name: str,
         timestamp: datetime,
     ) -> dict[str, Any]:
+        # Protect all task types, including validation, analysis,
+        # forecast and trader, against duplicate execution.
+        if self._has_already_run(task_name, timestamp):
+            return {
+                "task": task_name,
+                "status": "SKIPPED",
+                "attempt": 0,
+                "scheduled_at": timestamp.isoformat(),
+                "reason": "DUPLICATE_RUN",
+            }
+
         callback = self.tasks.get(task_name)
 
         if callback is None:
@@ -551,6 +671,7 @@ class SchedulerEngine:
                 "task": task_name,
                 "status": "FAILED",
                 "attempt": 0,
+                "scheduled_at": timestamp.isoformat(),
                 "error": (
                     f"No callback registered for enabled task "
                     f"'{task_name}'."
@@ -589,21 +710,20 @@ class SchedulerEngine:
                 continue
 
             # The callback has completed successfully or has
-            # explicitly skipped. Do not put history persistence
-            # inside the retry block.
+            # explicitly skipped. Record the scheduler timestamp
+            # before attempting history persistence.
             finished_at = _normalize_timestamp(self.clock())
 
             record = {
                 "task": task_name,
                 "status": task_status,
                 "attempt": attempt + 1,
+                "scheduled_at": timestamp.isoformat(),
                 "started_at": started_at.isoformat(),
                 "finished_at": finished_at.isoformat(),
                 "result": self._safe_result(result),
             }
 
-            # Record the run before attempting history persistence.
-            # A history error must not cause the callback to repeat.
             self._last_runs[task_name] = timestamp
 
             return self._persist_record(record)
@@ -614,6 +734,7 @@ class SchedulerEngine:
             "task": task_name,
             "status": "FAILED",
             "attempt": maximum_retries + 1,
+            "scheduled_at": timestamp.isoformat(),
             "started_at": started_at.isoformat(),
             "finished_at": finished_at.isoformat(),
             "error": (
@@ -694,6 +815,7 @@ class SchedulerEngine:
             name
             for name in collection_names
             if self._is_enabled(name)
+            and not self._has_already_run(name, timestamp)
             and (
                 force
                 or self._is_due(name, timestamp)
@@ -777,6 +899,10 @@ class SchedulerEngine:
 
         should_validate = (
             validation_enabled
+            and not self._has_already_run(
+                "validation",
+                timestamp,
+            )
             and (
                 force
                 or (
@@ -806,10 +932,16 @@ class SchedulerEngine:
                     "FAILED",
                 )
 
-        validation_succeeded = any(
-            item["task"] == "validation"
-            and item["status"] == "SUCCESS"
-            for item in records
+        validation_succeeded = (
+            self._has_already_run(
+                "validation",
+                timestamp,
+            )
+            or any(
+                item["task"] == "validation"
+                and item["status"] == "SUCCESS"
+                for item in records
+            )
         )
 
         if not validation_succeeded:
@@ -838,22 +970,28 @@ class SchedulerEngine:
                 True,
             ) is True
         ):
-            record = self._execute_task(
+            if self._has_already_run(
                 "market_analysis",
                 timestamp,
-            )
-            records.append(record)
-
-            if record["status"] == "FAILED":
-                return self._cycle_result(
+            ):
+                market_analysis_succeeded = True
+            else:
+                record = self._execute_task(
+                    "market_analysis",
                     timestamp,
-                    records,
-                    "FAILED",
                 )
+                records.append(record)
 
-            market_analysis_succeeded = (
-                record["status"] == "SUCCESS"
-            )
+                if record["status"] == "FAILED":
+                    return self._cycle_result(
+                        timestamp,
+                        records,
+                        "FAILED",
+                    )
+
+                market_analysis_succeeded = (
+                    record["status"] == "SUCCESS"
+                )
 
         forecast_config = self.config.get(
             "forecast",
@@ -862,6 +1000,10 @@ class SchedulerEngine:
 
         forecast_ready = (
             forecast_config.get("enabled") is True
+            and not self._has_already_run(
+                "forecast",
+                timestamp,
+            )
             and (
                 force
                 or self._is_due("forecast", timestamp)
@@ -911,6 +1053,10 @@ class SchedulerEngine:
             and (
                 not trader_requires_analysis
                 or market_analysis_succeeded
+            )
+            and not self._has_already_run(
+                "trader",
+                timestamp,
             )
         )
 
