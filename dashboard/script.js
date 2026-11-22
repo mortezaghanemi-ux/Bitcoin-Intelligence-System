@@ -13,6 +13,11 @@
 
 const API_ENDPOINT = "/api/dashboard";
 
+// Published copy (GitHub Pages): one JSON file per timeframe.
+const STATIC_MODE = Boolean(
+    document.querySelector('meta[name="dashboard-static"]')
+);
+
 const DEFAULT_PAIR = "XBTUSD";
 const DEFAULT_TIMEFRAME = "5m";
 
@@ -1093,8 +1098,12 @@ async function loadDashboard() {
             signal_limit: String(MAX_SIGNALS)
         });
 
+        const requestUrl = STATIC_MODE
+            ? `data/${timeframe}.json`
+            : `${API_ENDPOINT}?${parameters.toString()}`;
+
         const response = await fetch(
-            `${API_ENDPOINT}?${parameters.toString()}`,
+            requestUrl,
             {
                 method: "GET",
                 headers: {

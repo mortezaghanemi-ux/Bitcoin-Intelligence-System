@@ -72,3 +72,11 @@ interval in `config/schedules.yaml` is due.
 Notes: GitHub may delay scheduled runs by several minutes, and disables
 scheduled workflows after 60 days without repository activity (the data
 commits count as activity). Nothing here places orders.
+
+### Public dashboard
+
+After every run the workflow publishes a read-only copy of the
+dashboard to GitHub Pages (`dashboard/static_site.py`). One-time setup:
+repository Settings → Pages → Source: **GitHub Actions**. The address is
+`https://<owner>.github.io/<repo>/`. It shows the same data as the local
+dashboard and never places orders.
