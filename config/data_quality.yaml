@@ -1,3 +1,4 @@
+
 validation:
   require_utc_timestamps: true
   reject_missing_values: true
@@ -21,6 +22,12 @@ freshness:
     etf: 4320
     onchain: 180
     macro: 2880
+
+  candles_by_timeframe:
+    5m: 15
+    15m: 45
+    1h: 180
+    4h: 720
 
 history:
   preserve_raw_data: true
