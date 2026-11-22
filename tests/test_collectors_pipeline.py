@@ -1,6 +1,7 @@
+
 """Tests for the Kraken collection and validation pipeline."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 import pytest
@@ -31,6 +32,12 @@ def valid_config():
                 "reject_stale_data": True,
                 "max_age_minutes": {
                     "candles": 15,
+                },
+                "candles_by_timeframe": {
+                    "5m": 15,
+                    "15m": 45,
+                    "1h": 180,
+                    "4h": 720,
                 },
             },
         },
@@ -130,9 +137,7 @@ def mock_pipeline_dependencies(
     return calls
 
 
-def test_successful_pipeline(
-    mock_pipeline_dependencies,
-):
+def test_successful_pipeline(mock_pipeline_dependencies):
     """The pipeline should return PASS for valid candles."""
 
     result = pipeline.run_kraken_pipeline(
@@ -143,12 +148,9 @@ def test_successful_pipeline(
     assert result["pair"] == "XBTUSD"
     assert result["timeframe"] == "5m"
     assert result["collected_records"] == 1
-
     assert len(result["accepted"]) == 1
     assert result["rejected"].empty
-
     assert result["max_age_minutes"] == 15
-
     assert result["validation"]["status"] == "PASS"
 
 
@@ -179,6 +181,37 @@ def test_uses_configured_candle_freshness(
             "max_age_minutes"
         ]
         == 15
+    )
+
+
+@pytest.mark.parametrize(
+    "timeframe,expected_age",
+    [
+        ("5m", 15),
+        ("15m", 45),
+        ("1h", 180),
+        ("4h", 720),
+    ],
+)
+def test_uses_timeframe_specific_candle_freshness(
+    mock_pipeline_dependencies,
+    timeframe,
+    expected_age,
+):
+    """Each timeframe must use its configured freshness limit."""
+
+    result = pipeline.run_kraken_pipeline(
+        timeframe=timeframe,
+        collection_time=CHECK_TIME,
+    )
+
+    assert result["max_age_minutes"] == expected_age
+
+    assert (
+        mock_pipeline_dependencies["validation"][
+            "max_age_minutes"
+        ]
+        == expected_age
     )
 
 
@@ -263,7 +296,7 @@ def test_rejects_non_utc_collection_time():
         7,
         30,
         tzinfo=timezone(
-            __import__("datetime").timedelta(hours=3, minutes=30)
+            timedelta(hours=3, minutes=30)
         ),
     )
 
@@ -273,9 +306,7 @@ def test_rejects_non_utc_collection_time():
         )
 
 
-def test_handles_configuration_error(
-    monkeypatch,
-):
+def test_handles_configuration_error(monkeypatch):
     """Configuration errors must become pipeline errors."""
 
     def fail_config():
@@ -304,9 +335,10 @@ def test_handles_missing_freshness_configuration(
 ):
     """Missing candle freshness configuration must fail safely."""
 
-    del valid_config["data_quality"]["freshness"][
-        "max_age_minutes"
-    ]
+    freshness = valid_config["data_quality"]["freshness"]
+
+    del freshness["max_age_minutes"]
+    del freshness["candles_by_timeframe"]
 
     monkeypatch.setattr(
         pipeline,
