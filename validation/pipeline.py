@@ -21,6 +21,17 @@ DEFAULT_REPORT_PATH = (
     / "validation_reports.csv"
 )
 
+REQUIRED_COLUMNS = (
+    "open_time",
+    "close_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "source",
+)
+
 
 class ValidationPipelineError(RuntimeError):
     """Raised when the candle validation pipeline fails."""
@@ -66,13 +77,23 @@ def run_candle_validation(
     """Validate candles and persist source-specific reports."""
 
     if not isinstance(data, pd.DataFrame):
-        raise TypeError(
-            "data must be a pandas DataFrame"
-        )
+        raise TypeError("data must be a pandas DataFrame")
 
     if data.empty:
         raise ValidationPipelineError(
             "Cannot validate an empty candle dataset."
+        )
+
+    missing = [
+        column
+        for column in REQUIRED_COLUMNS
+        if column not in data.columns
+    ]
+
+    if missing:
+        raise ValidationPipelineError(
+            "Missing required columns: "
+            + ", ".join(missing)
         )
 
     checked_at = (
@@ -124,18 +145,12 @@ def run_candle_validation(
         report_rows = []
 
         for source in sorted(report_sources.unique()):
-
             source_mask = report_sources == source
             accepted_mask = accepted_sources == source
             rejected_mask = rejected_sources == source
 
-            source_accepted = accepted.loc[
-                accepted_mask
-            ]
-
-            source_rejected = rejected.loc[
-                rejected_mask
-            ]
+            source_accepted = accepted.loc[accepted_mask]
+            source_rejected = rejected.loc[rejected_mask]
 
             errors = set()
 
@@ -143,7 +158,6 @@ def run_candle_validation(
                 for message in source_rejected[
                     "validation_errors"
                 ].dropna():
-
                     errors.update(
                         item
                         for item in str(message).split(";")
