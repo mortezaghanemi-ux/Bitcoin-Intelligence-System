@@ -1,3 +1,4 @@
+
 """Candle validation pipeline."""
 
 from __future__ import annotations
@@ -59,11 +60,10 @@ def run_candle_validation(
     *,
     report_path=DEFAULT_REPORT_PATH,
     validation_time=None,
+    report_timestamp=None,
     max_age_minutes=15,
 ):
     """Validate candles and persist source-specific reports."""
-
-    # Input validation
 
     if not isinstance(data, pd.DataFrame):
         raise TypeError(
@@ -74,8 +74,6 @@ def run_candle_validation(
         raise ValidationPipelineError(
             "Cannot validate an empty candle dataset."
         )
-
-    # Validation timestamp
 
     checked_at = (
         validation_time
@@ -90,18 +88,26 @@ def run_candle_validation(
 
     checked_at = checked_at.astimezone(timezone.utc)
 
+    report_time = (
+        report_timestamp
+        if report_timestamp is not None
+        else checked_at
+    )
+
+    if not _is_utc_datetime(report_time):
+        raise ValueError(
+            "report_timestamp must be a timezone-aware UTC datetime"
+        )
+
+    report_time = report_time.astimezone(timezone.utc)
+
     try:
-
-        # Validate candle records
-
         accepted, rejected, validation_result = validate_candles(
             data,
             validation_time=checked_at,
             max_age_minutes=max_age_minutes,
             require_closed=True,
         )
-
-        # Normalize original source labels
 
         report_sources = data["source"].map(
             _normalize_source
@@ -117,14 +123,10 @@ def run_candle_validation(
 
         report_rows = []
 
-        # Create one report per source
-
         for source in sorted(report_sources.unique()):
 
             source_mask = report_sources == source
-
             accepted_mask = accepted_sources == source
-
             rejected_mask = rejected_sources == source
 
             source_accepted = accepted.loc[
@@ -138,7 +140,6 @@ def run_candle_validation(
             errors = set()
 
             if not source_rejected.empty:
-
                 for message in source_rejected[
                     "validation_errors"
                 ].dropna():
@@ -157,13 +158,12 @@ def run_candle_validation(
                 valid_records=len(source_accepted),
                 rejected_records=len(source_rejected),
                 errors=sorted(errors),
-                validation_timestamp=checked_at,
+                validation_timestamp=report_time,
             )
 
             report_rows.append(report)
 
     except Exception as exc:
-
         raise ValidationPipelineError(
             f"Candle validation pipeline failed: {exc}"
         ) from exc
