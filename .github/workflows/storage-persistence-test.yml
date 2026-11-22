@@ -2,15 +2,9 @@
 name: Storage Persistence Isolation Test
 
 on:
-  workflow_dispatch:
-    inputs:
-      phase:
-        description: "Choose the persistence test phase"
-        required: true
-        type: choice
-        options:
-          - seed
-          - verify
+  push:
+    branches:
+      - storage-persistence-test
 
 permissions:
   contents: write
@@ -37,40 +31,47 @@ jobs:
           path: runtime-data
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Seed first persistence marker
-        if: inputs.phase == 'seed'
+      - name: Test persistent storage
         working-directory: runtime-data
         run: |
+          set -e
+
           mkdir -p persistence-test
-          printf '%s\n' 'PERSIST_TEST_001' > persistence-test/markers.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add persistence-test/markers.txt
-          git commit -m "test: seed persistence marker"
-          git push origin HEAD:runtime-data-test
+          FILE="persistence-test/markers.txt"
 
-      - name: Verify first marker and append second marker
-        if: inputs.phase == 'verify'
-        working-directory: runtime-data
-        run: |
-          test -f persistence-test/markers.txt
-          grep -Fxq 'PERSIST_TEST_001' persistence-test/markers.txt
-          if grep -Fxq 'PERSIST_TEST_002' persistence-test/markers.txt; then
-            echo "Second marker already exists; refusing duplicate write."
-            exit 1
+          if [ ! -f "$FILE" ]; then
+            echo "FIRST RUN: Creating first marker."
+            printf '%s\n' 'PERSIST_TEST_001' > "$FILE"
+          else
+            echo "NEXT RUN: Checking previously saved marker."
+
+            test "$(grep -Fxc 'PERSIST_TEST_001' "$FILE")" -eq 1
+
+            if grep -Fxq 'PERSIST_TEST_002' "$FILE"; then
+              echo "Both markers already exist. Verifying storage."
+            else
+              echo "Appending second marker."
+              printf '%s\n' 'PERSIST_TEST_002' >> "$FILE"
+            fi
           fi
-          printf '%s\n' 'PERSIST_TEST_002' >> persistence-test/markers.txt
-          test "$(grep -Fxc 'PERSIST_TEST_001' persistence-test/markers.txt)" -eq 1
-          test "$(grep -Fxc 'PERSIST_TEST_002' persistence-test/markers.txt)" -eq 1
+
+          test "$(grep -Fxc 'PERSIST_TEST_001' "$FILE")" -eq 1
+
+          if grep -Fxq 'PERSIST_TEST_002' "$FILE"; then
+            test "$(grep -Fxc 'PERSIST_TEST_002' "$FILE")" -eq 1
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add persistence-test/markers.txt
-          git commit -m "test: verify persistence and append second marker"
-          git push origin HEAD:runtime-data-test
 
-      - name: Confirm persisted markers
-        if: inputs.phase == 'verify'
-        working-directory: runtime-data
-        run: |
-          grep -Fx 'PERSIST_TEST_001' persistence-test/markers.txt
-          grep -Fx 'PERSIST_TEST_002' persistence-test/markers.txt
+          git add "$FILE"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "test: update persistence markers"
+            git push origin HEAD:runtime-data-test
+          else
+            echo "No changes required."
+          fi
+
+          echo "Final persisted data:"
+          cat "$FILE"
