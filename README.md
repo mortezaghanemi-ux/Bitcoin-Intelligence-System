@@ -59,3 +59,16 @@ They are not predictions.
 - `dashboard/`
 - `reports/`
 - `tests/`
+## Automatic scheduling and persistent data
+
+`.github/workflows/main-runtime.yml` runs the scheduler every 5 minutes
+(`schedule`) and on demand (`workflow_dispatch`). GitHub runners are
+ephemeral, so each run restores `data/{raw,processed,forecast,trader,backtests}`
+from the `runtime-data` branch, runs one scheduler cycle, and commits any
+changes back to that branch (even if the cycle failed). The scheduler's
+history file is part of that data, so each task runs only when its own
+interval in `config/schedules.yaml` is due.
+
+Notes: GitHub may delay scheduled runs by several minutes, and disables
+scheduled workflows after 60 days without repository activity (the data
+commits count as activity). Nothing here places orders.
