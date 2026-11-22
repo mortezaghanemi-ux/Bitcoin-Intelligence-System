@@ -3,9 +3,16 @@ name: Bitcoin Intelligence Main Runtime
 
 on:
   workflow_dispatch:
+  schedule:
+    # Every 5 minutes (GitHub may delay runs; the scheduler's own
+    # per-task intervals in config/schedules.yaml decide what is due).
+    - cron: "*/5 * * * *"
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  DATA_BRANCH: runtime-data
 
 concurrency:
   group: bitcoin-intelligence-main-runtime
@@ -33,6 +40,24 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Restore persistent data
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin "$DATA_BRANCH" >/dev/null 2>&1; then
+            git clone --quiet --depth 1 --branch "$DATA_BRANCH" \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+              "$RUNNER_TEMP/data-store"
+            for d in raw processed forecast trader backtests; do
+              if [ -d "$RUNNER_TEMP/data-store/$d" ]; then
+                mkdir -p "data/$d"
+                cp -a "$RUNNER_TEMP/data-store/$d/." "data/$d/"
+              fi
+            done
+            echo "Restored data from branch $DATA_BRANCH"
+          else
+            echo "No data branch yet; starting with empty data"
+          fi
+
       - name: Validate project configuration
         run: python main.py check-config
 
@@ -42,6 +67,42 @@ jobs:
         run: |
           set -o pipefail
           python -m scheduler.runtime --once 2>&1 | tee scheduler-result.txt
+
+      - name: Persist data
+        if: always()
+        run: |
+          set -euo pipefail
+          store="$RUNNER_TEMP/data-store"
+          if [ ! -d "$store/.git" ]; then
+            rm -rf "$store"; mkdir -p "$store"
+            git -C "$store" init --quiet -b "$DATA_BRANCH"
+            git -C "$store" remote add origin \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          fi
+          for d in raw processed forecast trader backtests; do
+            if [ -d "data/$d" ]; then
+              mkdir -p "$store/$d"
+              cp -a "data/$d/." "$store/$d/"
+            fi
+          done
+          cd "$store"
+          git config user.name "bitcoin-intelligence-bot"
+          git config user.email "bitcoin-intelligence-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No data changes to persist"
+            exit 0
+          fi
+          git commit --quiet -m "data: runtime snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          for attempt in 1 2 3; do
+            if git push --quiet origin "HEAD:$DATA_BRANCH"; then
+              echo "Persisted data to $DATA_BRANCH"
+              exit 0
+            fi
+            git pull --quiet --rebase origin "$DATA_BRANCH" || true
+          done
+          echo "Could not persist data" >&2
+          exit 1
 
       - name: Save runtime result
         if: always()
