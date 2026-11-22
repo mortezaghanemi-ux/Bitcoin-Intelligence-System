@@ -1551,7 +1551,7 @@ class TradingSignalEngine:
             },
             "limitations": [
                 "Confidence is a rule-based score, not a calibrated probability.",
-                "LONG and SHORT signals require successful position sizing and risk validation.",
+                "LONG and SHORT signals require successful risk validation; position sizing is added only when an account equity is supplied.",
                 "Liquidation price is an estimate and is not exchange-specific.",
                 "Entry, stop-loss and take-profit levels are technical references.",
                 "Signals require independent manual review before any decision.",
