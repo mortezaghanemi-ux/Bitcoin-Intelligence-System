@@ -78,3 +78,11 @@ data collection. Run it from the operating system instead, for example a
 weekly cron job:
 
     0 3 * * 0  cd /path/to/project && python main.py backtest --last-days 180
+
+### Running the backtest on GitHub
+
+The **Bitcoin Intelligence Backtest** workflow does all of the steps
+above on GitHub's servers: it downloads Kraken's quarterly OHLCVT files,
+extracts the XBTUSD 5-minute file, runs `import-history` and `backtest`,
+and saves `data/backtests/` to the `runtime-data` branch. The dashboard
+shows the result after the next normal run.
