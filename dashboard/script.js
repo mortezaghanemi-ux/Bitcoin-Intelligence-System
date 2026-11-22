@@ -869,73 +869,164 @@ function renderTrading(trading) {
         return;
     }
 
-    for (const signal of signals.slice(0, MAX_SIGNALS)) {
-        const card = createElement("article", "signal-card");
+    const latestPrice = Number(
+        lastSnapshot?.market_data?.latest_candle?.close
+    );
 
-        const header = createElement("div", "signal-card-header");
-
-        const direction = signal.signal === "LONG"
-            ? "خرید (LONG)"
-            : "فروش (SHORT)";
-
-        const title = createElement("strong", "", direction);
-
-        title.style.color = signal.signal === "LONG"
-            ? "var(--success)"
-            : "var(--danger)";
-
-        header.appendChild(title);
-
-        header.appendChild(
-            createElement(
-                "span",
-                "status-badge",
-                "بررسی دستی"
+    signals.slice(0, MAX_SIGNALS).forEach((signal, index) => {
+        container.appendChild(
+            buildSignalCard(
+                signal,
+                index === 0 && Number.isFinite(latestPrice)
+                    ? latestPrice
+                    : null
             )
         );
+    });
+}
 
-        card.appendChild(header);
+function describeSignalLiveStatus(signal, price) {
+    const isLong = signal.signal === "LONG";
+    const stop = Number(signal.stop_loss);
+    const first = Number(signal.take_profit?.[0]?.price);
+    const lower = Number(signal.entry_range?.lower);
+    const upper = Number(signal.entry_range?.upper);
 
-        const details = document.createElement("div");
-
-        renderObject(details, {
-            analysis_timestamp: signal.analysis_timestamp,
-            current_price: signal.current_price,
-            timeframe: signal.timeframe,
-            entry_range: signal.entry_range,
-            stop_loss: signal.stop_loss,
-            take_profit: signal.take_profit,
-            risk_reward: signal.risk_reward,
-            confidence: signal.confidence,
-            reasons: signal.reasons
-        });
-
-        card.appendChild(details);
-
-        const history = describeHistoricalPerformance(
-            signal.historical_performance
-        );
-
-        const historyLine = createElement(
-            "p",
-            "",
-            history.text
-        );
-
-        historyLine.style.color = history.warning
-            ? "var(--warning)"
-            : "var(--success)";
-
-        card.appendChild(historyLine);
-
-        if (history.note) {
-            card.appendChild(
-                createElement("p", "empty-state", history.note)
-            );
-        }
-
-        container.appendChild(card);
+    if (price === null || !Number.isFinite(stop)) {
+        return { text: "قدیمی (سیگنال قبلی)", tone: "muted" };
     }
+
+    if (isLong ? price <= stop : price >= stop) {
+        return { text: "باطل شد: قیمت به حد ضرر رسید", tone: "danger" };
+    }
+
+    if (Number.isFinite(first) && (isLong ? price >= first : price <= first)) {
+        return { text: "قیمت به حد سود اول رسید", tone: "success" };
+    }
+
+    if (
+        Number.isFinite(lower) &&
+        Number.isFinite(upper) &&
+        price >= Math.min(lower, upper) &&
+        price <= Math.max(lower, upper)
+    ) {
+        return { text: "قیمت در محدوده ورود است", tone: "success" };
+    }
+
+    return {
+        text: "قیمت از محدوده ورود فاصله گرفته؛ ورود دیرهنگام است",
+        tone: "warning"
+    };
+}
+
+function buildSignalCard(signal, livePrice) {
+    const card = createElement("article", "signal-card");
+    const isLong = signal.signal === "LONG";
+    const dollars = (value) =>
+        Number.isFinite(Number(value))
+            ? `${formatNumber(Number(value), 2)} دلار`
+            : "—";
+
+    const range = signal.entry_range || {};
+    const stopValue = Number(signal.stop_loss);
+    const currentPrice = Number(signal.current_price);
+    const riskPercent =
+        Number.isFinite(stopValue) && currentPrice > 0
+            ? (Math.abs(currentPrice - stopValue) / currentPrice) * 100
+            : null;
+
+    const live = describeSignalLiveStatus(signal, livePrice);
+
+    const rows = [
+        ["جهت", `${isLong ? "🟢 LONG" : "🔴 SHORT"}`],
+        ["تایم‌فریم اجرا", signal.timeframe || "—"],
+        [
+            "محدوده ورود",
+            Number.isFinite(Number(range.lower)) &&
+            Number.isFinite(Number(range.upper))
+                ? `${formatNumber(Math.min(range.lower, range.upper), 2)}` +
+                  ` – ${formatNumber(Math.max(range.lower, range.upper), 2)} دلار`
+                : "—"
+        ],
+        ["قیمت مرجع هنگام تولید", dollars(signal.current_price)],
+        ["حد ضرر", dollars(signal.stop_loss)]
+    ];
+
+    (signal.take_profit || []).forEach((level) => {
+        rows.push([`حد سود ${toPersianLevel(level.level)}`, dollars(level.price)]);
+    });
+
+    rows.push(
+        ["ریسک به بازده", formatNumber(Number(signal.risk_reward), 2)],
+        [
+            "فاصله حد ضرر از قیمت",
+            riskPercent === null ? "—" : `${formatNumber(riskPercent, 2)}٪`
+        ],
+        ["اطمینان الگوریتمی", formatNumber(Number(signal.confidence), 0)],
+        ["زمان تحلیل", formatTimestamp(signal.analysis_timestamp)],
+        ["وضعیت فعلی", live.text]
+    );
+
+    const table = createElement("table", "signal-table");
+    const body = document.createElement("tbody");
+
+    const head = document.createElement("tr");
+    head.appendChild(createElement("th", "", "پارامتر"));
+    head.appendChild(createElement("th", "", "مقدار"));
+    const thead = document.createElement("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+
+    for (const [label, value] of rows) {
+        const row = document.createElement("tr");
+        row.appendChild(createElement("td", "", label));
+        const cell = createElement("td", "signal-value", String(value));
+        if (label === "وضعیت فعلی") {
+            cell.dataset.tone = live.tone;
+        }
+        row.appendChild(cell);
+        body.appendChild(row);
+    }
+
+    table.appendChild(body);
+    card.appendChild(table);
+
+    if (Array.isArray(signal.reasons) && signal.reasons.length > 0) {
+        const reasons = createElement("ul", "signal-reasons");
+        for (const reason of signal.reasons) {
+            reasons.appendChild(createElement("li", "", String(reason)));
+        }
+        card.appendChild(reasons);
+    }
+
+    const history = describeHistoricalPerformance(
+        signal.historical_performance
+    );
+
+    const historyLine = createElement("p", "", history.text);
+    historyLine.style.color = history.warning
+        ? "var(--warning)"
+        : "var(--success)";
+    card.appendChild(historyLine);
+
+    if (history.note) {
+        card.appendChild(createElement("p", "empty-state", history.note));
+    }
+
+    card.appendChild(
+        createElement(
+            "p",
+            "empty-state",
+            "اطمینان الگوریتمی امتیاز قوانین است، نه احتمال برد. " +
+            "این سیگنال فقط برای بررسی دستی است و معامله خودکار انجام نمی‌شود."
+        )
+    );
+
+    return card;
+}
+
+function toPersianLevel(level) {
+    return ["اول", "دوم", "سوم"][Number(level) - 1] || String(level);
 }
 
 
