@@ -1,3 +1,4 @@
+
 """Kraken OHLCV collection and validation pipeline."""
 
 from __future__ import annotations
@@ -430,6 +431,7 @@ def run_kraken_pipeline(
             validation_data,
             report_path=report_path,
             validation_time=checked_at,
+            report_timestamp=datetime.now(timezone.utc),
             max_age_minutes=age_limit,
         )
 
