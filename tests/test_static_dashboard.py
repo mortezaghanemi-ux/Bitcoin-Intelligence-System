@@ -16,8 +16,8 @@ def test_static_build_writes_page_and_snapshots(tmp_path):
     html = (site / "index.html").read_text(encoding="utf-8")
 
     assert 'name="dashboard-static"' in html
-    assert 'href="style.css"' in html
-    assert 'src="script.js"' in html
+    assert 'href="style.css?v=' in html
+    assert 'src="script.js?v=' in html
     assert 'value="1d"' not in html
     assert '<option value="1h" selected>' in html
     assert (site / ".nojekyll").exists()
