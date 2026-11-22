@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,8 @@ DEFAULT_OUTPUT_DIR = (
 )
 
 DEFAULT_TIMEOUT = 15.0
+
+LOGGER = logging.getLogger(__name__)
 
 MAX_PROVIDER_AGE_MINUTES = 15
 
@@ -534,6 +537,14 @@ def collect_kraken_futures(
 
     records = []
 
+    # Kraken lists many Bitcoin contracts. Thinly traded dated
+    # futures can go hours without a trade, so one stale or malformed
+    # contract must not discard the fresh ones. Each rejected ticker is
+    # skipped and remembered; the collection fails only when no Bitcoin
+    # ticker at all was usable.
+    skipped: list[tuple[str, str]] = []
+    examined = 0
+
     for ticker in tickers:
 
         if not isinstance(ticker, dict):
@@ -553,10 +564,17 @@ def collect_kraken_futures(
         ):
             continue
 
-        record = _parse_ticker(
-            ticker,
-            checked_at,
-        )
+        examined += 1
+
+        try:
+            record = _parse_ticker(
+                ticker,
+                checked_at,
+            )
+
+        except KrakenFuturesCollectorError as exc:
+            skipped.append((str(ticker_symbol), str(exc)))
+            continue
 
         key = (
             record["symbol"],
@@ -569,6 +587,26 @@ def collect_kraken_futures(
         existing.add(key)
 
         records.append(record)
+
+    if skipped:
+        LOGGER.warning(
+            "Skipped %d of %d Bitcoin futures tickers: %s",
+            len(skipped),
+            examined,
+            "; ".join(
+                f"{symbol}: {reason}"
+                for symbol, reason in skipped[:10]
+            ),
+        )
+
+    if examined > 0 and len(skipped) == examined:
+        symbol, reason = skipped[0]
+
+        raise KrakenFuturesCollectorError(
+            f"No usable Bitcoin futures ticker "
+            f"({len(skipped)} rejected). First rejection: "
+            f"{symbol}: {reason}"
+        )
 
     if not records:
         return []
