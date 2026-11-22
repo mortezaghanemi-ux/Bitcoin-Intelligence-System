@@ -101,12 +101,15 @@ def _validate_max_age(value: Any) -> float:
 def _resolve_max_age(
     max_age_minutes: float | None,
     config: dict[str, Any],
+    timeframe: str | None = None,
 ) -> float | None:
     """
     Resolve candle freshness from project configuration.
 
-    An explicit max_age_minutes value takes precedence
-    over the configured freshness limit.
+    An explicit max_age_minutes value takes precedence.
+    Otherwise, use the configured limit for the requested
+    timeframe. Fall back to the general candles limit
+    when timeframe-specific limits are not configured.
     """
 
     if max_age_minutes is not None:
@@ -156,6 +159,33 @@ def _resolve_max_age(
 
     if not enabled or not reject_stale:
         return None
+
+    timeframe_limits = freshness.get(
+        "candles_by_timeframe"
+    )
+
+    if timeframe_limits is not None:
+        if not isinstance(timeframe_limits, Mapping):
+            raise KrakenPipelineError(
+                "freshness.candles_by_timeframe must be a mapping."
+            )
+
+        if timeframe is not None:
+            if timeframe not in timeframe_limits:
+                raise KrakenPipelineError(
+                    "Missing freshness limit for timeframe: "
+                    f"{timeframe}"
+                )
+
+            try:
+                return _validate_max_age(
+                    timeframe_limits[timeframe]
+                )
+
+            except ValueError as exc:
+                raise KrakenPipelineError(
+                    f"Invalid freshness limit for {timeframe}: {exc}"
+                ) from exc
 
     if "max_age_minutes" not in freshness:
         raise KrakenPipelineError(
@@ -376,11 +406,12 @@ def run_kraken_pipeline(
             f"Cannot load project configuration: {exc}"
         ) from exc
 
-    # Step 6: Resolve freshness policy.
+    # Step 6: Resolve freshness policy for this timeframe.
 
     age_limit = _resolve_max_age(
         max_age_minutes,
         config,
+        timeframe,
     )
 
     # Step 7: Collect Kraken data.
