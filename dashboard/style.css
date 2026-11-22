@@ -595,3 +595,47 @@ tbody tr:hover {
         animation-iteration-count: 1 !important;
     }
 }
+
+/* Signal card table */
+.signal-card {
+    border: 1px solid var(--border, #243049);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.signal-table {
+    width: 100%;
+    min-width: 0;
+    border-collapse: collapse;
+}
+
+.signal-table th,
+.signal-table td {
+    white-space: normal;
+}
+
+.signal-table th,
+.signal-table td {
+    padding: 10px 6px;
+    text-align: right;
+    border-bottom: 1px solid var(--border, #243049);
+}
+
+.signal-table td.signal-value {
+    text-align: left;
+    direction: ltr;
+    font-weight: 600;
+}
+
+.signal-value[data-tone="success"] { color: var(--success); }
+.signal-value[data-tone="warning"] { color: var(--warning); }
+.signal-value[data-tone="danger"] { color: var(--danger); }
+.signal-value[data-tone="muted"] { color: var(--muted, #8a97b1); }
+
+.signal-reasons {
+    margin: 12px 0;
+    padding-inline-start: 20px;
+    line-height: 1.8;
+}
+.signal-value[data-tone] { direction: rtl; text-align: right; }
