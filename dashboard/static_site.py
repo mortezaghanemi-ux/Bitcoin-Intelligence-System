@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,9 +23,14 @@ STATIC_TIMEFRAMES = ("5m", "15m", "1h", "4h")
 DEFAULT_STATIC_TIMEFRAME = "1h"
 
 
-def _static_index(html: str) -> str:
-    html = html.replace('href="/style.css"', 'href="style.css"')
-    html = html.replace('src="/script.js"', 'src="script.js"')
+def _static_index(html: str, version: str = "0") -> str:
+    # The version query makes browsers fetch new assets after a deploy.
+    html = html.replace(
+        'href="/style.css"', f'href="style.css?v={version}"'
+    )
+    html = html.replace(
+        'src="/script.js"', f'src="script.js?v={version}"'
+    )
     html = html.replace(
         '<option value="1d">روزانه</option>', ""
     )
@@ -61,7 +67,7 @@ def build_static_dashboard(
         encoding="utf-8"
     )
     (output / "index.html").write_text(
-        _static_index(index), encoding="utf-8"
+        _static_index(index, str(int(time.time()))), encoding="utf-8"
     )
 
     for asset in ("style.css", "script.js"):
