@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 env:
   DATA_BRANCH: runtime-data
@@ -23,6 +25,8 @@ jobs:
     name: Run Scheduler and Trading Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      site_built: ${{ steps.site.outputs.built }}
 
     steps:
       - name: Checkout repository
@@ -104,6 +108,22 @@ jobs:
           echo "Could not persist data" >&2
           exit 1
 
+      - name: Build public dashboard
+        id: site
+        if: always()
+        run: |
+          if python -m dashboard.static_site site; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload dashboard files
+        if: always() && steps.site.outputs.built == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
       - name: Save runtime result
         if: always()
         uses: actions/upload-artifact@v4
@@ -112,3 +132,17 @@ jobs:
           path: scheduler-result.txt
           if-no-files-found: ignore
           retention-days: 7
+
+  deploy-dashboard:
+    name: Publish public dashboard
+    needs: run-main-runtime
+    if: ${{ !cancelled() && needs.run-main-runtime.outputs.site_built == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
