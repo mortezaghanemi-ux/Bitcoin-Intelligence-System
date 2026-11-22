@@ -643,6 +643,196 @@ function isDisplayableSignal(signal) {
 }
 
 
+function formatPercentValue(value) {
+    if (value === null || value === undefined) {
+        return "—";
+    }
+
+    return `${formatNumber(value, 1)}٪`;
+}
+
+
+function translateScope(scope) {
+    if (!scope) {
+        return "—";
+    }
+
+    if (scope === "all signals") {
+        return "همه سیگنال‌ها";
+    }
+
+    if (scope === "LONG signals") {
+        return "سیگنال‌های خرید";
+    }
+
+    if (scope === "SHORT signals") {
+        return "سیگنال‌های فروش";
+    }
+
+    if (scope.startsWith("confidence ")) {
+        return `اطمینان ${scope.slice("confidence ".length)}`;
+    }
+
+    return scope;
+}
+
+
+function describeHistoricalPerformance(performance) {
+    if (!performance || performance.status === "NO_BACKTEST") {
+        return {
+            text: "وین‌ریت گذشته: هنوز بک‌تست اجرا نشده است.",
+            warning: true
+        };
+    }
+
+    const interval = Array.isArray(performance.win_rate_ci95_pct)
+        ? ` (بازه اطمینان ۹۵٪: ${formatNumber(performance.win_rate_ci95_pct[0], 0)} تا ` +
+          `${formatNumber(performance.win_rate_ci95_pct[1], 0)})`
+        : "";
+
+    const text =
+        `وین‌ریت اندازه‌گیری‌شده در گذشته: ` +
+        `${formatPercentValue(performance.win_rate_pct)}${interval} ` +
+        `از ${formatNumber(performance.trades, 0)} معامله شبیه‌سازی‌شده ` +
+        `(${translateScope(performance.scope)}، هدف ${performance.target || "TP1"}).`;
+
+    return {
+        text,
+        warning: performance.status !== "MEASURED",
+        note: performance.status !== "MEASURED"
+            ? "تعداد نمونه کم است؛ این عدد قابل اتکا نیست."
+            : "این عدد اندازه‌گیری گذشته است، نه تضمین آینده."
+    };
+}
+
+
+function renderPerformanceTable(report) {
+    const wrapper = createElement("div", "table-wrapper");
+    const table = document.createElement("table");
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+
+    for (const label of [
+        "گروه",
+        "تعداد معامله",
+        "وین‌ریت",
+        "بازه اطمینان ۹۵٪",
+        "وضعیت نمونه"
+    ]) {
+        headRow.appendChild(createElement("th", "", label));
+    }
+
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = document.createElement("tbody");
+
+    const rows = [
+        ["همه سیگنال‌ها", report.overall],
+        ["خارج از نمونه (بخش آخر دوره)", report.out_of_sample],
+        ["خرید (LONG)", report.by_direction?.LONG],
+        ["فروش (SHORT)", report.by_direction?.SHORT]
+    ];
+
+    for (const [name, group] of Object.entries(
+        report.by_confidence || {}
+    )) {
+        rows.push([`اطمینان ${name}`, group]);
+    }
+
+    for (const [label, group] of rows) {
+        if (!group) {
+            continue;
+        }
+
+        const row = document.createElement("tr");
+        const interval = Array.isArray(group.win_rate_ci95_pct)
+            ? `${formatNumber(group.win_rate_ci95_pct[0], 0)} تا ` +
+              `${formatNumber(group.win_rate_ci95_pct[1], 0)}`
+            : "—";
+
+        row.appendChild(createElement("td", "", label));
+        row.appendChild(
+            createElement("td", "", formatNumber(group.trades, 0))
+        );
+        row.appendChild(
+            createElement("td", "", formatPercentValue(group.win_rate_pct))
+        );
+        row.appendChild(createElement("td", "", interval));
+        row.appendChild(
+            createElement(
+                "td",
+                "",
+                group.sample_status === "SUFFICIENT"
+                    ? "کافی"
+                    : "نمونه کم"
+            )
+        );
+
+        body.appendChild(row);
+    }
+
+    table.appendChild(body);
+    wrapper.appendChild(table);
+
+    return wrapper;
+}
+
+
+function renderPerformance(performance) {
+    const container = getElement("performance-content");
+
+    if (!container) {
+        return;
+    }
+
+    clearElement(container);
+
+    setBadge(
+        "performance-status",
+        performance?.status || "UNAVAILABLE"
+    );
+
+    const report = performance?.report;
+
+    if (!report) {
+        container.appendChild(
+            createElement(
+                "p",
+                "empty-state",
+                "هنوز بک‌تستی اجرا نشده است. دستور backtest را اجرا کنید."
+            )
+        );
+        return;
+    }
+
+    const period = report.period || {};
+
+    container.appendChild(
+        createElement(
+            "p",
+            "",
+            `دوره: ${formatNumber(period.days, 1)} روز · ` +
+            `هدف سود: ${report.target || "TP1"} · ` +
+            `بیشینه افت سرمایه: ${formatPercentValue(
+                report.risk?.maximum_drawdown_pct
+            )}`
+        )
+    );
+
+    container.appendChild(renderPerformanceTable(report));
+
+    container.appendChild(
+        createElement(
+            "p",
+            "empty-state",
+            "شبیه‌سازی روی داده گذشته با کارمزد و slippage؛ " +
+            "پیش‌بینی آینده نیست و نتیجه واقعی می‌تواند متفاوت باشد."
+        )
+    );
+}
+
+
 function renderTrading(trading) {
     const container = getElement("trading-content");
 
@@ -716,6 +906,29 @@ function renderTrading(trading) {
         });
 
         card.appendChild(details);
+
+        const history = describeHistoricalPerformance(
+            signal.historical_performance
+        );
+
+        const historyLine = createElement(
+            "p",
+            "",
+            history.text
+        );
+
+        historyLine.style.color = history.warning
+            ? "var(--warning)"
+            : "var(--success)";
+
+        card.appendChild(historyLine);
+
+        if (history.note) {
+            card.appendChild(
+                createElement("p", "empty-state", history.note)
+            );
+        }
+
         container.appendChild(card);
     }
 }
@@ -835,6 +1048,8 @@ function renderDashboard(snapshot) {
     );
 
     renderTrading(snapshot.trading || {});
+
+    renderPerformance(snapshot.performance || {});
 
     renderReportSection(
         "quality-content",

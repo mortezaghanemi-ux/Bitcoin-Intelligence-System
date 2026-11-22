@@ -50,6 +50,10 @@ schedules:
     prevent_overlapping_runs: true
     sequential_dependencies: true
     stop_on_critical_error: true
+    # Supplementary sources: a failure is recorded in degraded_sources
+    # but never blocks validation, analysis or the trading signal.
+    # market_data and candles are always critical.
+    optional_collections: [derivatives, etf_flows, onchain, macro]
     allow_retry_on_failure: true
     maximum_retries: 2
 

@@ -69,7 +69,21 @@ def validate_candles(
     validation_time: datetime | None = None,
     max_age_minutes: float | None = None,
     require_closed: bool = True,
+    freshness_scope: str = "all",
 ):
+    """Validate candle records.
+
+    freshness_scope controls which candles the max_age_minutes limit
+    applies to:
+    - "all": every candle must be fresh (default, original behavior).
+    - "latest": only the newest candle must be fresh. Historical
+      candles in a batch are still checked for every other rule.
+    """
+
+    if freshness_scope not in ("all", "latest"):
+        raise ValueError(
+            "freshness_scope must be 'all' or 'latest'"
+        )
 
     if not isinstance(data, pd.DataFrame):
         raise TypeError("data must be a pandas DataFrame")
@@ -190,6 +204,20 @@ def validate_candles(
 
         valid[column] = normalized
 
+    # Newest valid close time, used when freshness_scope == "latest"
+
+    parsed_closes = [
+        value
+        for value in valid["close_time"]
+        if value is not None
+    ]
+
+    latest_close = (
+        max(parsed_closes)
+        if parsed_closes
+        else None
+    )
+
     # OHLC validation
 
     for index, row in valid.iterrows():
@@ -255,7 +283,10 @@ def validate_candles(
                     "candle_not_closed"
                 )
 
-            if max_age_minutes is not None:
+            if max_age_minutes is not None and (
+                freshness_scope == "all"
+                or closed == latest_close
+            ):
 
                 age_minutes = (
                     checked_at_ts - closed

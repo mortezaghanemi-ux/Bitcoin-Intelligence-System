@@ -73,6 +73,7 @@ def run_candle_validation(
     validation_time=None,
     report_timestamp=None,
     max_age_minutes=15,
+    freshness_scope="all",
 ):
     """Validate candles and persist source-specific reports."""
 
@@ -128,6 +129,7 @@ def run_candle_validation(
             validation_time=checked_at,
             max_age_minutes=max_age_minutes,
             require_closed=True,
+            freshness_scope=freshness_scope,
         )
 
         report_sources = data["source"].map(

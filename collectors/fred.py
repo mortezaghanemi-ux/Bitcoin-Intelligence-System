@@ -240,6 +240,59 @@ def _validate_page_size(
     return value
 
 
+def _load_latest_values(
+    path: Path,
+) -> dict[tuple[str, str], object]:
+    """Load the most recent stored value per observation date.
+
+    Used to avoid re-appending unchanged observations when FRED
+    returns a new realtime window on every request. A changed value
+    (a real revision) is still stored.
+    """
+
+    latest: dict[tuple[str, str], object] = {}
+
+    if not path.exists():
+        return latest
+
+    try:
+        with path.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            for line in file:
+
+                if not line.strip():
+                    continue
+
+                try:
+                    record = json.loads(line)
+
+                except json.JSONDecodeError:
+                    continue
+
+                if not isinstance(record, dict):
+                    continue
+
+                series_id = record.get("series_id")
+                observation_date = record.get(
+                    "observation_date"
+                )
+
+                if series_id is None or observation_date is None:
+                    continue
+
+                latest[
+                    (series_id, observation_date)
+                ] = record.get("value")
+
+    except OSError:
+        return {}
+
+    return latest
+
+
 def _load_existing_keys(
     path: Path,
 ) -> set[tuple[str, str, str, str]]:
@@ -664,6 +717,10 @@ def collect_fred_observations(
         output_file
     )
 
+    latest_values = _load_latest_values(
+        output_file
+    )
+
     records = []
 
     try:
@@ -699,7 +756,20 @@ def collect_fred_observations(
                     if key in existing:
                         continue
 
+                    value_key = (
+                        record["series_id"],
+                        record["observation_date"],
+                    )
+
+                    if (
+                        value_key in latest_values
+                        and latest_values[value_key]
+                        == record["value"]
+                    ):
+                        continue
+
                     existing.add(key)
+                    latest_values[value_key] = record["value"]
 
                     records.append(record)
 

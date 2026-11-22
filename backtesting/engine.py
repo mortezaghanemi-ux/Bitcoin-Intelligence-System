@@ -346,7 +346,43 @@ class BacktestingEngine:
         slippage_bps: float = 2.0,
         execution_timeframe: str = "5m",
         signal_engine: TradingSignalEngine | None = None,
+        lookback_candles: int | None = 150,
+        target_index: int = 0,
+        decision_step: int = 1,
     ) -> None:
+        if (
+            isinstance(decision_step, bool)
+            or not isinstance(decision_step, int)
+            or decision_step < 1
+        ):
+            raise BacktestingEngineError(
+                "decision_step must be an integer >= 1."
+            )
+
+        self.decision_step = decision_step
+
+        if (
+            isinstance(target_index, bool)
+            or not isinstance(target_index, int)
+            or target_index not in (0, 1, 2)
+        ):
+            raise BacktestingEngineError(
+                "target_index must be 0, 1 or 2 (TP1, TP2 or TP3)."
+            )
+
+        self.target_index = target_index
+
+        if lookback_candles is not None and (
+            isinstance(lookback_candles, bool)
+            or not isinstance(lookback_candles, int)
+            or lookback_candles < 30
+        ):
+            raise BacktestingEngineError(
+                "lookback_candles must be None or an integer >= 30."
+            )
+
+        self.lookback_candles = lookback_candles
+
         self.initial_equity = _finite_number(
             initial_equity,
             "initial_equity",
@@ -423,9 +459,22 @@ class BacktestingEngine:
         snapshot = {}
 
         for timeframe in SUPPORTED_TIMEFRAMES:
-            available = datasets[timeframe].loc[
-                datasets[timeframe]["close_time"] <= decision_time
-            ].copy(deep=True)
+            frame = datasets[timeframe]
+
+            end = int(
+                frame["close_time"].searchsorted(
+                    decision_time,
+                    side="right",
+                )
+            )
+
+            start = (
+                max(0, end - self.lookback_candles)
+                if self.lookback_candles is not None
+                else 0
+            )
+
+            available = frame.iloc[start:end].copy(deep=True)
 
             minimum_candles = int(
                 getattr(
@@ -467,7 +516,10 @@ class BacktestingEngine:
         if not isinstance(targets, list) or not targets:
             return None
 
-        first_target = targets[0]
+        if len(targets) <= self.target_index:
+            return None
+
+        first_target = targets[self.target_index]
 
         if not isinstance(first_target, dict):
             return None
@@ -595,6 +647,7 @@ class BacktestingEngine:
         self.open_position = {
             "signal_id": signal.get("signal_id"),
             "direction": direction,
+            "confidence": signal.get("confidence"),
             "quantity_btc": quantity,
             "entry_price": entry_price,
             "stop_loss": stop_loss,
@@ -700,6 +753,8 @@ class BacktestingEngine:
 
         net_pnl = gross_pnl - total_trade_fees
 
+        equity_before = self.equity
+
         self.equity += net_pnl
         self.total_fees += exit_fee
 
@@ -711,6 +766,7 @@ class BacktestingEngine:
         trade = {
             "signal_id": position["signal_id"],
             "direction": direction,
+            "confidence": position.get("confidence"),
             "entry_time": position["entry_time"],
             "decision_time": position["decision_time"],
             "exit_time": exit_time.isoformat(),
@@ -732,8 +788,8 @@ class BacktestingEngine:
             "total_fees": round(total_trade_fees, 8),
             "net_pnl": round(net_pnl, 8),
             "return_pct_on_equity": round(
-                (net_pnl / self.equity) * 100.0
-                if self.equity != 0
+                (net_pnl / equity_before) * 100.0
+                if equity_before != 0
                 else 0.0,
                 6,
             ),
@@ -748,12 +804,26 @@ class BacktestingEngine:
         self,
         timestamp: pd.Timestamp,
     ) -> None:
-        """Append the current realized equity observation."""
+        """Record the current realized equity observation.
 
-        self.equity_curve.append({
+        A second observation for the same timestamp (for example when
+        a position is force-closed on the last candle) replaces the
+        previous one so timestamps stay strictly increasing.
+        """
+
+        point = {
             "timestamp": timestamp.isoformat(),
             "equity": round(self.equity, 8),
-        })
+        }
+
+        if (
+            self.equity_curve
+            and self.equity_curve[-1]["timestamp"] == point["timestamp"]
+        ):
+            self.equity_curve[-1] = point
+            return
+
+        self.equity_curve.append(point)
 
     def _calculate_summary(self) -> dict[str, Any]:
         """Calculate basic backtest summary statistics."""
@@ -870,6 +940,12 @@ class BacktestingEngine:
 
                 continue
 
+            if index % self.decision_step != 0:
+                self._record_equity(
+                    next_candle["close_time"]
+                )
+                continue
+
             snapshot = self._build_snapshot(
                 datasets,
                 decision_time,
@@ -948,6 +1024,8 @@ class BacktestingEngine:
                 "fee_rate": self.fee_rate,
                 "slippage_bps": self.slippage_bps,
                 "leverage": self.leverage,
+                "target": f"TP{self.target_index + 1}",
+                "decision_step": self.decision_step,
             },
             "summary": self._calculate_summary(),
             "trades": list(self.trades),
@@ -955,7 +1033,7 @@ class BacktestingEngine:
             "limitations": [
                 "This is a candle-based simulation, not an exchange execution replay.",
                 "Entry is simulated at the next candle open.",
-                "Only the first take-profit target is used.",
+                f"Only take-profit target TP{self.target_index + 1} is used.",
                 "Stop loss is prioritized when both exit levels are touched in one candle.",
                 "Funding payments and exchange-specific liquidation rules are not modeled.",
                 "Trading fees and slippage are estimates supplied to the engine.",
@@ -972,10 +1050,16 @@ def run_backtest(
     fee_rate: float = 0.0006,
     slippage_bps: float = 2.0,
     execution_timeframe: str = "5m",
+    lookback_candles: int | None = 150,
+    target_index: int = 0,
+    decision_step: int = 1,
 ) -> dict[str, Any]:
     """Convenience function for running one backtest."""
 
     engine = BacktestingEngine(
+        lookback_candles=lookback_candles,
+        target_index=target_index,
+        decision_step=decision_step,
         initial_equity=initial_equity,
         leverage=leverage,
         fee_rate=fee_rate,

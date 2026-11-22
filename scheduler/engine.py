@@ -28,6 +28,16 @@ SKIPPED_STATUSES = {"SKIPPED", "NO_NEW_DATA"}
 FAILED_STATUSES = {"FAILED", "ERROR"}
 
 
+# Supplementary data sources. The candle collection that every signal
+# depends on is never optional.
+OPTIONAL_COLLECTION_CHOICES = (
+    "derivatives",
+    "etf_flows",
+    "onchain",
+    "macro",
+)
+
+
 class SchedulerError(RuntimeError):
     """Raised when scheduler configuration or execution is invalid."""
 
@@ -243,6 +253,22 @@ class SchedulerEngine:
             raise SchedulerError(
                 "execution.maximum_retries must be a "
                 "non-negative integer."
+            )
+
+        optional = execution.get("optional_collections", [])
+
+        if (
+            not isinstance(optional, list)
+            or any(
+                item not in OPTIONAL_COLLECTION_CHOICES
+                for item in optional
+            )
+        ):
+            raise SchedulerError(
+                "execution.optional_collections must be a list "
+                "containing only: "
+                + ", ".join(OPTIONAL_COLLECTION_CHOICES)
+                + "."
             )
 
         for key in (
@@ -837,6 +863,7 @@ class SchedulerEngine:
 
             if (
                 record["status"] == "FAILED"
+                and name not in self._optional_collections()
                 and self.config["execution"].get(
                     "stop_on_critical_error"
                 ) is True
@@ -862,6 +889,7 @@ class SchedulerEngine:
             item["status"] == "FAILED"
             for item in records
             if item["task"] in collection_names
+            and item["task"] not in self._optional_collections()
         )
 
         collection_succeeded = (
@@ -955,10 +983,7 @@ class SchedulerEngine:
                 timestamp,
                 records,
                 "FAILED"
-                if any(
-                    item["status"] == "FAILED"
-                    for item in records
-                )
+                if self._has_critical_failure(records)
                 else "SUCCESS",
             )
 
@@ -1073,10 +1098,7 @@ class SchedulerEngine:
             )
             records.append(record)
 
-        failed = any(
-            item["status"] == "FAILED"
-            for item in records
-        )
+        failed = self._has_critical_failure(records)
 
         return self._cycle_result(
             timestamp,
@@ -1084,14 +1106,44 @@ class SchedulerEngine:
             "FAILED" if failed else "SUCCESS",
         )
 
-    @staticmethod
+    def _optional_collections(self) -> frozenset[str]:
+        """Names of supplementary sources that may fail safely."""
+
+        return frozenset(
+            self.config["execution"].get(
+                "optional_collections",
+                [],
+            )
+        )
+
+    def _has_critical_failure(
+        self,
+        records: list[dict[str, Any]],
+    ) -> bool:
+        optional = self._optional_collections()
+
+        return any(
+            item["status"] == "FAILED"
+            and item["task"] not in optional
+            for item in records
+        )
+
     def _cycle_result(
+        self,
         timestamp: datetime,
         records: list[dict[str, Any]],
         status: str,
     ) -> dict[str, Any]:
+        optional = self._optional_collections()
+
         return {
             "status": status,
+            "degraded_sources": [
+                item["task"]
+                for item in records
+                if item["status"] == "FAILED"
+                and item["task"] in optional
+            ],
             "timestamp": timestamp.isoformat(),
             "task_count": len(records),
             "successful_tasks": sum(

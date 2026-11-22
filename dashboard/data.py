@@ -689,6 +689,53 @@ def load_trading_signals(
     }
 
 
+def load_performance(
+    *,
+    performance_directory: str | Path | None = None,
+) -> dict[str, Any]:
+    """Load the latest saved backtest performance report, read-only."""
+
+    from backtesting.performance import load_latest_performance
+
+    report = load_latest_performance(performance_directory)
+
+    if report is None:
+        return {
+            "status": "UNAVAILABLE",
+            "report": None,
+            "message": "No backtest has been run yet.",
+        }
+
+    return {
+        "status": "AVAILABLE",
+        "report": report,
+        "message": (
+            "Measured on past data by simulation; "
+            "not a prediction."
+        ),
+    }
+
+
+def _attach_historical_performance(
+    signals: list[dict[str, Any]],
+    report: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return signal copies with the matching measured win rate."""
+
+    from backtesting.performance import lookup_signal_performance
+
+    return [
+        {
+            **signal,
+            "historical_performance": lookup_signal_performance(
+                report,
+                signal,
+            ),
+        }
+        for signal in signals
+    ]
+
+
 def _section_status(
     section: dict[str, Any],
 ) -> str:
@@ -716,6 +763,7 @@ def load_dashboard_data(
     candle_directory: str | Path | None = None,
     history_path: str | Path | None = None,
     report_directory: str | Path | None = None,
+    performance_directory: str | Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """
@@ -744,6 +792,15 @@ def load_dashboard_data(
         history_path=history_path,
         limit=signal_limit,
         now=checked_at,
+    )
+
+    performance = load_performance(
+        performance_directory=performance_directory,
+    )
+
+    trading["signals"] = _attach_historical_performance(
+        trading["signals"],
+        performance["report"],
     )
 
     reports, report_error = _load_reports(
@@ -820,8 +877,10 @@ def load_dashboard_data(
             "latest_report": trading_report,
         },
         "data_quality": data_quality,
+        "performance": performance,
         "limitations": [
             "Dashboard data is read-only.",
+            "Win rates are measured on past data by simulation and are not predictions.",
             "Unavailable data is not replaced with zero or fabricated values.",
             "Stale data is identified explicitly.",
             "Only validated actionable trading candidates are displayed.",

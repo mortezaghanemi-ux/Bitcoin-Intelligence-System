@@ -588,6 +588,24 @@ def _validate_configuration(
             f"schedules.execution.{key}",
         )
 
+    optional_sources = schedule_execution.get(
+        "optional_collections",
+        [],
+    )
+
+    if (
+        not isinstance(optional_sources, list)
+        or any(
+            item
+            not in ("derivatives", "etf_flows", "onchain", "macro")
+            for item in optional_sources
+        )
+    ):
+        raise ConfigurationError(
+            "schedules.execution.optional_collections may only "
+            "contain derivatives, etf_flows, onchain and macro."
+        )
+
     retries = schedule_execution.get("maximum_retries")
 
     if (
