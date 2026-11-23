@@ -300,3 +300,36 @@ def test_signal_engine_analysis_window_is_validated():
 
     with pytest.raises(TradingSignalEngineError):
         TradingSignalEngine(analysis_window=10)
+
+
+def test_edge_verdict_flags_losing_rules():
+    from backtesting.performance import edge_verdict
+
+    losing = evaluate_performance(
+        make_result([10, -12] * 10), minimum_sample=5, generated_at=NOW
+    )
+
+    assert edge_verdict(losing) == "NO_EDGE_MEASURED"
+
+    found = lookup_signal_performance(
+        losing, {"signal": "LONG", "confidence": 75}
+    )
+
+    assert found["edge_verdict"] == "NO_EDGE_MEASURED"
+    assert found["overall_profit_factor"] < 1
+    assert found["total_return_pct"] < 0
+
+
+def test_edge_verdict_requires_both_parts_profitable():
+    from backtesting.performance import edge_verdict
+
+    winning = evaluate_performance(
+        make_result([12, 12, -10] * 20), minimum_sample=5, generated_at=NOW
+    )
+
+    assert edge_verdict(winning) == "EDGE_MEASURED"
+    assert edge_verdict(
+        {"overall": {"profit_factor": 1.5, "sample_status": "SUFFICIENT"},
+         "out_of_sample": {"profit_factor": 0.7, "trades": 30,
+                           "sample_status": "SUFFICIENT"}}
+    ) == "NO_EDGE_MEASURED"
