@@ -170,6 +170,17 @@ def activation_gate(report: dict[str, Any]) -> dict[str, Any]:
         ),
     }
 
+    holdout = report.get("holdout")
+
+    if holdout is not None:
+        checks["holdout_trades"] = (
+            holdout["trades"] >= GATE_MINIMUM_TRADES
+        )
+        checks["holdout_profit_factor"] = (
+            pf(holdout) is not None
+            and pf(holdout) >= GATE_MINIMUM_PROFIT_FACTOR
+        )
+
     return {
         "passed": all(checks.values()),
         "checks": checks,
@@ -284,8 +295,14 @@ def evaluate_performance(
     minimum_sample: int = MINIMUM_SAMPLE_SIZE,
     generated_at: datetime | None = None,
     profile: dict[str, Any] | None = None,
+    holdout_before: str | None = None,
 ) -> dict[str, Any]:
-    """Build a performance report from a completed backtest."""
+    """Build a performance report from a completed backtest.
+
+    holdout_before names a cut-off date. Trades before it were never
+    used to choose the profile, so they form an honest confirmation
+    test; they are scored separately and must also pass the gate.
+    """
 
     if (
         not isinstance(backtest_result, dict)
@@ -405,6 +422,18 @@ def evaluate_performance(
         "limitations": list(backtest_result.get("limitations", []))
         + [DISCLAIMER],
     }
+
+    if holdout_before is not None:
+        cutoff = pd.Timestamp(holdout_before, tz="UTC")
+        held = [
+            t for t in trades
+            if pd.Timestamp(t["decision_time"]) < cutoff
+        ]
+        report["holdout"] = {
+            "before": cutoff.isoformat(),
+            **summarize_trades(held, minimum_sample=minimum_sample),
+            "walk_forward": walk_forward_folds(held),
+        }
 
     report["walk_forward"] = walk_forward_folds(trades)
     report["confidence_check"] = confidence_informativeness(trades)

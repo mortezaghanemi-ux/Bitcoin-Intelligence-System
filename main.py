@@ -632,20 +632,45 @@ def run_import_history(
     csv_path: str,
     pair: str = "XBTUSD",
     output_dir: str | None = None,
+    segmented: bool = False,
+    since: str | None = None,
+    minimum_days: float = 14.0,
 ) -> dict[str, Any]:
-    """Convert a Kraken 5m CSV file into backtesting history files."""
+    """Convert a Kraken 5m CSV file into backtesting history files.
+
+    With segmented=True every continuous stretch is kept in its own
+    folder (see backtesting/segments.py) instead of only the newest.
+    """
+
+    from datetime import datetime, timezone
 
     from backtesting.importer import (
         HistoryImportError,
         import_kraken_history,
+        import_kraken_history_segments,
     )
 
     try:
-        result = import_kraken_history(
-            csv_path,
-            pair=_validate_pair(pair),
-            output_dir=output_dir,
+        start = (
+            datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
+            if since
+            else None
         )
+        if segmented:
+            result = import_kraken_history_segments(
+                csv_path,
+                pair=_validate_pair(pair),
+                output_dir=output_dir,
+                start=start,
+                minimum_days=minimum_days,
+            )
+        else:
+            result = import_kraken_history(
+                csv_path,
+                pair=_validate_pair(pair),
+                output_dir=output_dir,
+                start=start,
+            )
 
     except HistoryImportError as exc:
         raise ApplicationError(
@@ -655,6 +680,135 @@ def run_import_history(
     result["status"] = "SUCCESS"
 
     return result
+
+
+def run_backtest_shard(
+    segments_dir: str,
+    profile: str | None,
+    target: int,
+    step: int,
+    start: str | None,
+    end: str | None,
+    output: str,
+    minimum_days: float = 20.0,
+) -> dict[str, Any]:
+    """Backtest one date range and save the raw merged result."""
+
+    import json
+    from pathlib import Path
+
+    from backtesting.segments import SegmentError, run_shard
+    from trader.strategy_profile import (
+        StrategyProfileError,
+        get_profile,
+    )
+
+    if target not in (1, 2, 3):
+        raise ApplicationError("target must be 1, 2 or 3.")
+
+    try:
+        selected = get_profile(profile) if profile else None
+        shard = run_shard(
+            segments_dir,
+            profile=selected,
+            target_index=target - 1,
+            decision_step=step,
+            start=start,
+            end=end,
+            minimum_days=minimum_days,
+        )
+    except (SegmentError, StrategyProfileError) as exc:
+        raise ApplicationError(str(exc)) from exc
+
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "profile": profile or "baseline",
+                "target": target,
+                **shard,
+            },
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+
+    return {
+        "status": "SUCCESS",
+        "output": str(path),
+        "stretches_used": len(shard["used"]),
+        "stretches_skipped": len(shard["skipped"]),
+        "trades": sum(item["trades"] for item in shard["used"]),
+    }
+
+
+def run_evaluate_shards(
+    inputs: str,
+    profile: str,
+    target: int,
+    holdout_before: str | None,
+    output_dir: str | None,
+) -> dict[str, Any]:
+    """Merge shard files for one profile/target and score them."""
+
+    import json
+    from pathlib import Path
+
+    from backtesting.performance import (
+        PerformanceError,
+        evaluate_performance,
+        save_performance_report,
+    )
+    from backtesting.segments import SegmentError, combine_results
+
+    results = []
+    windows = []
+
+    for file in sorted(Path(inputs).rglob("shard_*.json")):
+        shard = json.loads(file.read_text(encoding="utf-8"))
+
+        if shard.get("profile") != profile or shard.get("target") != target:
+            continue
+
+        results.extend(shard["results"])
+        windows.extend(shard["used"])
+
+    if not results:
+        raise ApplicationError(
+            f"No shard results for {profile} TP{target} in {inputs}."
+        )
+
+    try:
+        from trader.strategy_profile import get_profile
+
+        merged = combine_results(results)
+        report = evaluate_performance(
+            merged,
+            profile=get_profile(profile).to_dict(),
+            holdout_before=holdout_before,
+        )
+    except (SegmentError, PerformanceError) as exc:
+        raise ApplicationError(str(exc)) from exc
+
+    report["target"] = f"TP{target}"
+    report["stretches"] = windows
+    path = save_performance_report(
+        report,
+        Path(output_dir) if output_dir else None,
+        set_latest=False,
+    )
+
+    return {
+        "status": "SUCCESS",
+        "report": str(path),
+        "profile": profile,
+        "target": report["target"],
+        "stretches": len(windows),
+        "overall": report["overall"],
+        "holdout": report.get("holdout"),
+        "activation_gate": report["activation_gate"],
+    }
 
 
 def run_backtest_evaluation(
@@ -910,6 +1064,50 @@ def build_argument_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("csv_path")
     import_parser.add_argument("--pair", default="XBTUSD")
     import_parser.add_argument("--output-dir", default=None)
+    import_parser.add_argument(
+        "--segmented",
+        action="store_true",
+        help="Keep every continuous stretch, each in its own folder.",
+    )
+    import_parser.add_argument(
+        "--since",
+        default=None,
+        help="Ignore history before this date (YYYY-MM-DD).",
+    )
+    import_parser.add_argument(
+        "--min-days",
+        type=float,
+        default=14.0,
+        help="Smallest continuous stretch to keep (segmented only).",
+    )
+
+    shard_parser = subparsers.add_parser(
+        "backtest-shard",
+        help="Backtest one date range across all history stretches.",
+    )
+    shard_parser.add_argument("--segments-dir", required=True)
+    shard_parser.add_argument("--profile", default=None)
+    shard_parser.add_argument("--target", type=int, default=1)
+    shard_parser.add_argument("--step", type=int, default=12)
+    shard_parser.add_argument("--from", dest="start", default=None)
+    shard_parser.add_argument("--to", dest="end", default=None)
+    shard_parser.add_argument(
+        "--min-days",
+        type=float,
+        default=20.0,
+        help="Skip stretches shorter than this inside the date range.",
+    )
+    shard_parser.add_argument("--output", required=True)
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate-shards",
+        help="Combine shard results and score them.",
+    )
+    evaluate_parser.add_argument("--inputs", required=True)
+    evaluate_parser.add_argument("--profile", required=True)
+    evaluate_parser.add_argument("--target", type=int, required=True)
+    evaluate_parser.add_argument("--holdout-before", default=None)
+    evaluate_parser.add_argument("--output-dir", default=None)
 
     backtest_parser = subparsers.add_parser(
         "backtest",
@@ -1020,6 +1218,30 @@ def main(
             result = run_import_history(
                 csv_path=arguments.csv_path,
                 pair=arguments.pair,
+                output_dir=arguments.output_dir,
+                segmented=arguments.segmented,
+                since=arguments.since,
+                minimum_days=arguments.min_days,
+            )
+
+        elif arguments.command == "backtest-shard":
+            result = run_backtest_shard(
+                segments_dir=arguments.segments_dir,
+                profile=arguments.profile,
+                target=arguments.target,
+                step=arguments.step,
+                start=arguments.start,
+                end=arguments.end,
+                output=arguments.output,
+                minimum_days=arguments.min_days,
+            )
+
+        elif arguments.command == "evaluate-shards":
+            result = run_evaluate_shards(
+                inputs=arguments.inputs,
+                profile=arguments.profile,
+                target=arguments.target,
+                holdout_before=arguments.holdout_before,
                 output_dir=arguments.output_dir,
             )
 
