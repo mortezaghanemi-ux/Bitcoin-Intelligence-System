@@ -35,7 +35,7 @@ def call(profile, direction="BULLISH", directions=None, candles=None):
 def test_shipped_profiles_load_and_are_valid():
     profiles, active = load_profiles()
 
-    assert active == "baseline"
+    assert active == "h1_base"
     assert {"baseline", "h1_base", "h1_regime"} <= set(profiles)
     assert profiles["h1_base"].execution_timeframe == "1h"
 
@@ -128,3 +128,38 @@ def test_engine_applies_profile_and_changes_signal_id():
     assert result["parameters"]["profile"] == "h1"
     assert result["timeframe"] == "1h"
     assert result["signal_id"] != plain["signal_id"]
+
+
+def test_live_pipeline_uses_the_active_profile(tmp_path):
+    import shutil
+    from pathlib import Path
+
+    from trader.pipeline import TradingPipeline
+
+    config = Path(__file__).resolve().parents[1] / "config"
+    copy = tmp_path / "config"
+    shutil.copytree(config, copy)
+
+    pipeline = TradingPipeline(
+        history_path=tmp_path / "h.jsonl",
+        rejection_path=tmp_path / "r.jsonl",
+        config_dir=copy,
+    )
+
+    # Shipped configuration: h1_base is active.
+    assert pipeline.engine.profile.name == "h1_base"
+    assert pipeline.engine.execution_timeframe == "1h"
+
+    text = (copy / "strategy_profiles.yaml").read_text()
+    (copy / "strategy_profiles.yaml").write_text(
+        text.replace("active: h1_base", "active: baseline")
+    )
+
+    baseline = TradingPipeline(
+        history_path=tmp_path / "h2.jsonl",
+        rejection_path=tmp_path / "r2.jsonl",
+        config_dir=copy,
+    )
+
+    assert baseline.engine.profile is None
+    assert baseline.engine.execution_timeframe == "5m"
