@@ -85,9 +85,31 @@ def test_attach_does_not_mutate_and_handles_missing_report():
     )
 
 
-def test_snapshot_includes_performance_and_signal_context(tmp_path):
+def _with_profile(signal):
+    from trader.strategy_profile import load_profiles
+
+    signal.setdefault("parameters", {})["profile"] = load_profiles()[1]
+    return signal
+
+
+def test_old_profile_signals_are_hidden(tmp_path):
     history = tmp_path / "history.jsonl"
     history.write_text(json.dumps(make_signal(NOW)) + "\n")
+
+    snapshot = load_dashboard_data(
+        history_path=history,
+        performance_directory=tmp_path / "none",
+        candle_directory=tmp_path / "candles",
+        report_directory=tmp_path / "reports",
+        now=NOW,
+    )
+
+    assert snapshot["trading"]["signals"] == []
+
+
+def test_snapshot_includes_performance_and_signal_context(tmp_path):
+    history = tmp_path / "history.jsonl"
+    history.write_text(json.dumps(_with_profile(make_signal(NOW))) + "\n")
 
     performance_dir = tmp_path / "perf"
     saved_report(performance_dir)
@@ -114,7 +136,7 @@ def test_snapshot_includes_performance_and_signal_context(tmp_path):
 
 def test_snapshot_without_backtest_is_explicit(tmp_path):
     history = tmp_path / "history.jsonl"
-    history.write_text(json.dumps(make_signal(NOW)) + "\n")
+    history.write_text(json.dumps(_with_profile(make_signal(NOW))) + "\n")
 
     snapshot = load_dashboard_data(
         history_path=history,
