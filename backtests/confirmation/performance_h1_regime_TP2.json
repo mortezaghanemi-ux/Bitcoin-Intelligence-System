@@ -1,0 +1,418 @@
+{
+  "status": "COMPLETED",
+  "generated_at": "2026-11-23T12:25:22.927688+00:00",
+  "pair": "XBTUSD",
+  "profile": {
+    "allowed_regimes": [
+      "TRENDING"
+    ],
+    "blackout_windows": [],
+    "description": "1h levels, only in a trending 4h regime.",
+    "execution_timeframe": "1h",
+    "fill_timeframe": "5m",
+    "higher_timeframe_bias": null,
+    "maximum_pullback_atr": null,
+    "minimum_adx": null,
+    "minimum_confidence": 60.0,
+    "minimum_risk_reward": 1.5,
+    "name": "h1_regime",
+    "regime_timeframe": "4h",
+    "require_regime_direction": false,
+    "stop_atr_multiplier": 1.5
+  },
+  "execution_timeframe": "5m",
+  "target": "TP2",
+  "period": {
+    "start": "2020-01-01T00:10:00+00:00",
+    "end": "2026-10-01T00:00:00+00:00",
+    "days": 2464.99,
+    "in_sample_until": "2024-09-21T12:03:00+00:00"
+  },
+  "minimum_sample_size": 30,
+  "overall": {
+    "trades": 440,
+    "wins": 193,
+    "losses": 247,
+    "breakeven": 0,
+    "win_rate_pct": 43.86,
+    "win_rate_ci95_pct": [
+      39.3,
+      48.53
+    ],
+    "profit_factor": 0.9941,
+    "expectancy_per_trade": -0.17185879,
+    "sample_status": "SUFFICIENT"
+  },
+  "in_sample": {
+    "trades": 302,
+    "wins": 127,
+    "losses": 175,
+    "breakeven": 0,
+    "win_rate_pct": 42.05,
+    "win_rate_ci95_pct": [
+      36.62,
+      47.69
+    ],
+    "profit_factor": 0.9142,
+    "expectancy_per_trade": -2.55873523,
+    "sample_status": "SUFFICIENT"
+  },
+  "out_of_sample": {
+    "trades": 138,
+    "wins": 66,
+    "losses": 72,
+    "breakeven": 0,
+    "win_rate_pct": 47.83,
+    "win_rate_ci95_pct": [
+      39.66,
+      56.11
+    ],
+    "profit_factor": 1.1834,
+    "expectancy_per_trade": 5.05159545,
+    "sample_status": "SUFFICIENT"
+  },
+  "by_direction": {
+    "LONG": {
+      "trades": 252,
+      "wins": 112,
+      "losses": 140,
+      "breakeven": 0,
+      "win_rate_pct": 44.44,
+      "win_rate_ci95_pct": [
+        38.44,
+        50.62
+      ],
+      "profit_factor": 1.0356,
+      "expectancy_per_trade": 1.03040817,
+      "sample_status": "SUFFICIENT"
+    },
+    "SHORT": {
+      "trades": 188,
+      "wins": 81,
+      "losses": 107,
+      "breakeven": 0,
+      "win_rate_pct": 43.09,
+      "win_rate_ci95_pct": [
+        36.21,
+        50.23
+      ],
+      "profit_factor": 0.9391,
+      "expectancy_per_trade": -1.78340811,
+      "sample_status": "SUFFICIENT"
+    }
+  },
+  "by_confidence": {
+    "60-69": {
+      "trades": 45,
+      "wins": 18,
+      "losses": 27,
+      "breakeven": 0,
+      "win_rate_pct": 40.0,
+      "win_rate_ci95_pct": [
+        27.02,
+        54.55
+      ],
+      "profit_factor": 0.8673,
+      "expectancy_per_trade": -4.24241564,
+      "sample_status": "SUFFICIENT"
+    },
+    "70-79": {
+      "trades": 67,
+      "wins": 33,
+      "losses": 34,
+      "breakeven": 0,
+      "win_rate_pct": 49.25,
+      "win_rate_ci95_pct": [
+        37.65,
+        60.94
+      ],
+      "profit_factor": 1.2853,
+      "expectancy_per_trade": 7.54061855,
+      "sample_status": "SUFFICIENT"
+    },
+    "80-100": {
+      "trades": 328,
+      "wins": 142,
+      "losses": 186,
+      "breakeven": 0,
+      "win_rate_pct": 43.29,
+      "win_rate_ci95_pct": [
+        38.04,
+        48.7
+      ],
+      "profit_factor": 0.9594,
+      "expectancy_per_trade": -1.18881282,
+      "sample_status": "SUFFICIENT"
+    }
+  },
+  "by_exit_reason": {
+    "TAKE_PROFIT": 186,
+    "STOP_LOSS": 244,
+    "END_OF_BACKTEST": 10
+  },
+  "risk": {
+    "total_return_pct": -1.20727,
+    "maximum_drawdown_pct": 13.093166,
+    "profit_factor": 0.9940954
+  },
+  "assumptions": {
+    "fee_rate": 0.0006,
+    "slippage_bps": 2.0,
+    "leverage": 1.0,
+    "decision_step_candles": 12
+  },
+  "limitations": [
+    "This is a candle-based simulation, not an exchange execution replay.",
+    "Entry is simulated at the next candle open.",
+    "Only take-profit target TP2 is used.",
+    "Stop loss is prioritized when both exit levels are touched in one candle.",
+    "Funding payments and exchange-specific liquidation rules are not modeled.",
+    "Trading fees and slippage are estimates supplied to the engine.",
+    "No real orders are placed.",
+    "Results are merged from separate continuous stretches. The equity curve compounds from one stretch to the next; trade profits are counted at the same starting size in every stretch.",
+    "Measured on past data by simulation. It is not a prediction, and future results can differ."
+  ],
+  "holdout": {
+    "before": "2025-11-02T00:00:00+00:00",
+    "trades": 376,
+    "wins": 160,
+    "losses": 216,
+    "breakeven": 0,
+    "win_rate_pct": 42.55,
+    "win_rate_ci95_pct": [
+      37.66,
+      47.6
+    ],
+    "profit_factor": 0.9415,
+    "expectancy_per_trade": -1.73569773,
+    "sample_status": "SUFFICIENT",
+    "walk_forward": {
+      "folds": [
+        {
+          "from": "2020-01-12T13:05:00+00:00",
+          "to": "2021-06-07T04:05:00+00:00",
+          "trades": 94,
+          "win_rate_pct": 40.43,
+          "profit_factor": 0.8669,
+          "net_pnl": -382.58082935
+        },
+        {
+          "from": "2021-06-07T21:05:00+00:00",
+          "to": "2022-11-08T19:05:00+00:00",
+          "trades": 94,
+          "win_rate_pct": 39.36,
+          "profit_factor": 0.8137,
+          "net_pnl": -536.21117771
+        },
+        {
+          "from": "2023-01-11T16:05:00+00:00",
+          "to": "2024-07-04T09:05:00+00:00",
+          "trades": 94,
+          "win_rate_pct": 45.74,
+          "profit_factor": 1.062,
+          "net_pnl": 166.30678705
+        },
+        {
+          "from": "2024-07-15T04:05:00+00:00",
+          "to": "2025-10-30T19:05:00+00:00",
+          "trades": 94,
+          "win_rate_pct": 44.68,
+          "profit_factor": 1.0368,
+          "net_pnl": 99.86287344
+        }
+      ],
+      "profitable_folds": 2,
+      "fold_count": 4
+    }
+  },
+  "walk_forward": {
+    "folds": [
+      {
+        "from": "2020-01-12T13:05:00+00:00",
+        "to": "2021-09-13T15:05:00+00:00",
+        "trades": 110,
+        "win_rate_pct": 37.27,
+        "profit_factor": 0.7472,
+        "net_pnl": -896.83904465
+      },
+      {
+        "from": "2021-09-14T23:05:00+00:00",
+        "to": "2023-07-13T20:05:00+00:00",
+        "trades": 110,
+        "win_rate_pct": 43.64,
+        "profit_factor": 0.9953,
+        "net_pnl": -14.5967696
+      },
+      {
+        "from": "2023-07-14T19:05:00+00:00",
+        "to": "2025-01-12T10:05:00+00:00",
+        "trades": 110,
+        "win_rate_pct": 45.45,
+        "profit_factor": 1.0276,
+        "net_pnl": 87.09567474
+      },
+      {
+        "from": "2025-01-12T16:05:00+00:00",
+        "to": "2026-09-23T16:05:00+00:00",
+        "trades": 110,
+        "win_rate_pct": 49.09,
+        "profit_factor": 1.2521,
+        "net_pnl": 748.72227204
+      }
+    ],
+    "profitable_folds": 2,
+    "fold_count": 4
+  },
+  "confidence_check": {
+    "status": "MEASURED",
+    "correlation": 0.0214,
+    "informative": false,
+    "threshold": 0.0953
+  },
+  "activation_gate": {
+    "passed": false,
+    "checks": {
+      "overall_trades": true,
+      "overall_profit_factor": false,
+      "out_of_sample_trades": true,
+      "out_of_sample_profit_factor": false,
+      "walk_forward_consistency": false,
+      "holdout_trades": true,
+      "holdout_profit_factor": false
+    },
+    "rules": {
+      "minimum_profit_factor": 1.2,
+      "minimum_trades": 30,
+      "minimum_out_of_sample_trades": 15,
+      "minimum_profitable_folds": "3 of 4"
+    }
+  },
+  "stretches": [
+    {
+      "segment": "segment_20200101",
+      "from": "2020-01-01T00:00:00+00:00",
+      "to": "2020-10-24T16:00:00+00:00",
+      "days": 297.67,
+      "trades": 45
+    },
+    {
+      "segment": "segment_20201024",
+      "from": "2020-10-24T20:00:00+00:00",
+      "to": "2021-01-01T00:00:00+00:00",
+      "days": 68.17,
+      "trades": 20
+    },
+    {
+      "segment": "segment_20201024",
+      "from": "2021-01-01T00:00:00+00:00",
+      "to": "2021-01-29T12:00:00+00:00",
+      "days": 28.5,
+      "trades": 2
+    },
+    {
+      "segment": "segment_20210129",
+      "from": "2021-01-29T20:00:00+00:00",
+      "to": "2021-07-22T20:00:00+00:00",
+      "days": 174.0,
+      "trades": 33
+    },
+    {
+      "segment": "segment_20210723",
+      "from": "2021-07-23T16:00:00+00:00",
+      "to": "2022-01-01T00:00:00+00:00",
+      "days": 161.33,
+      "trades": 33
+    },
+    {
+      "segment": "segment_20210723",
+      "from": "2022-01-01T00:00:00+00:00",
+      "to": "2022-05-26T20:00:00+00:00",
+      "days": 145.83,
+      "trades": 30
+    },
+    {
+      "segment": "segment_20220526",
+      "from": "2022-05-27T00:00:00+00:00",
+      "to": "2022-09-04T20:00:00+00:00",
+      "days": 100.83,
+      "trades": 16
+    },
+    {
+      "segment": "segment_20220904",
+      "from": "2022-09-05T00:00:00+00:00",
+      "to": "2023-01-01T00:00:00+00:00",
+      "days": 118.0,
+      "trades": 9
+    },
+    {
+      "segment": "segment_20220904",
+      "from": "2023-01-01T00:00:00+00:00",
+      "to": "2023-02-22T00:00:00+00:00",
+      "days": 52.0,
+      "trades": 7
+    },
+    {
+      "segment": "segment_20230222",
+      "from": "2023-02-22T04:00:00+00:00",
+      "to": "2023-05-07T16:00:00+00:00",
+      "days": 74.5,
+      "trades": 16
+    },
+    {
+      "segment": "segment_20230507",
+      "from": "2023-05-08T00:00:00+00:00",
+      "to": "2024-01-01T00:00:00+00:00",
+      "days": 238.0,
+      "trades": 33
+    },
+    {
+      "segment": "segment_20240120",
+      "from": "2024-01-21T00:00:00+00:00",
+      "to": "2024-04-14T00:00:00+00:00",
+      "days": 84.0,
+      "trades": 18
+    },
+    {
+      "segment": "segment_20240414",
+      "from": "2024-04-14T12:00:00+00:00",
+      "to": "2025-01-01T00:00:00+00:00",
+      "days": 261.5,
+      "trades": 66
+    },
+    {
+      "segment": "segment_20240414",
+      "from": "2025-01-01T00:00:00+00:00",
+      "to": "2025-01-25T12:00:00+00:00",
+      "days": 24.5,
+      "trades": 7
+    },
+    {
+      "segment": "segment_20250125",
+      "from": "2025-01-25T20:00:00+00:00",
+      "to": "2025-08-28T08:00:00+00:00",
+      "days": 214.5,
+      "trades": 27
+    },
+    {
+      "segment": "segment_20250828",
+      "from": "2025-08-28T12:00:00+00:00",
+      "to": "2025-11-01T12:00:00+00:00",
+      "days": 65.0,
+      "trades": 14
+    },
+    {
+      "segment": "segment_20251101",
+      "from": "2025-11-02T00:00:00+00:00",
+      "to": "2026-01-01T00:00:00+00:00",
+      "days": 60.0,
+      "trades": 8
+    },
+    {
+      "segment": "segment_20251101",
+      "from": "2026-01-01T00:00:00+00:00",
+      "to": "2026-10-01T00:00:00+00:00",
+      "days": 273.0,
+      "trades": 56
+    }
+  ]
+}
