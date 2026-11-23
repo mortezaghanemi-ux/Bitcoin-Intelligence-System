@@ -8,15 +8,18 @@ on:
     inputs:
       last_days:
         description: "Use only the most recent N days of history"
-        default: "270"
+        default: "1095"
       step:
         description: "Check for a signal every N five-minute candles (12 = hourly)"
         default: "12"
       target:
         description: "Which take-profit counts as a win (1, 2 or 3)"
         default: "1"
+      source:
+        description: "full = multi-year history from Kraken's full archive; quarters = only the listed quarterly files"
+        default: "full"
       quarters:
-        description: "Kraken quarterly files to download, space separated"
+        description: "Used when source is quarters (space separated)"
         default: "2026Q1 2026Q2 2026Q3"
 
 permissions:
@@ -52,7 +55,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Download Kraken 5-minute history
+      - name: Download Kraken 5-minute history (full archive, ranged)
+        if: ${{ inputs.source == 'full' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/kraken"
+          python -m backtesting.remote_zip "$RUNNER_TEMP/kraken/XBTUSD_5.csv"
+          wc -l "$RUNNER_TEMP/kraken/XBTUSD_5.csv"
+          head -1 "$RUNNER_TEMP/kraken/XBTUSD_5.csv"
+          tail -1 "$RUNNER_TEMP/kraken/XBTUSD_5.csv"
+
+      - name: Download Kraken 5-minute history (quarterly files)
+        if: ${{ inputs.source != 'full' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/kraken"
