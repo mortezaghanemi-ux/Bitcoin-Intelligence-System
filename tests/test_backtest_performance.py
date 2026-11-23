@@ -333,3 +333,57 @@ def test_edge_verdict_requires_both_parts_profitable():
          "out_of_sample": {"profit_factor": 0.7, "trades": 30,
                            "sample_status": "SUFFICIENT"}}
     ) == "NO_EDGE_MEASURED"
+
+
+def test_walk_forward_and_gate():
+    from backtesting.performance import (
+        activation_gate,
+        walk_forward_folds,
+    )
+
+    steady = evaluate_performance(
+        make_result([12, 12, -10] * 20), minimum_sample=5, generated_at=NOW
+    )
+
+    assert steady["walk_forward"]["profitable_folds"] == 4
+    assert steady["activation_gate"]["passed"] is True
+
+    # Profit comes only from the first quarter of the trades.
+    uneven = [30] * 3 + [-10] * 3 + [-1] * 12 + [12, -10] * 6 + [-5] * 12
+    report = evaluate_performance(
+        make_result(uneven * 2), minimum_sample=5, generated_at=NOW
+    )
+
+    assert report["activation_gate"]["checks"]["walk_forward_consistency"] is False
+    assert report["activation_gate"]["passed"] is False
+    assert walk_forward_folds([])["folds"] == []
+    assert activation_gate(steady)["rules"]["minimum_profit_factor"] == 1.2
+
+
+def test_confidence_check_needs_enough_trades():
+    from backtesting.performance import confidence_informativeness
+
+    assert confidence_informativeness([])["status"] == "INSUFFICIENT_SAMPLE"
+
+    trades = [
+        {"confidence": 60 + (i % 40), "net_pnl": 1 if (i % 40) > 20 else -1}
+        for i in range(200)
+    ]
+
+    result = confidence_informativeness(trades)
+
+    assert result["status"] == "MEASURED"
+    assert result["informative"] is True
+
+
+def test_profile_is_recorded_and_saved_per_profile(tmp_path):
+    report = evaluate_performance(
+        make_result([10, -5, 10]),
+        generated_at=NOW,
+        profile={"name": "h1_test"},
+    )
+
+    path = save_performance_report(report, tmp_path, set_latest=False)
+
+    assert path.name == "performance_h1_test_TP1.json"
+    assert not (tmp_path / "performance_latest.json").exists()

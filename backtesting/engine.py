@@ -1053,10 +1053,12 @@ def run_backtest(
     lookback_candles: int | None = 150,
     target_index: int = 0,
     decision_step: int = 1,
+    signal_engine: Any = None,
 ) -> dict[str, Any]:
     """Convenience function for running one backtest."""
 
     engine = BacktestingEngine(
+        signal_engine=signal_engine,
         lookback_candles=lookback_candles,
         target_index=target_index,
         decision_step=decision_step,

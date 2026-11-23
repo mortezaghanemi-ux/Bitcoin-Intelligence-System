@@ -664,8 +664,15 @@ def run_backtest_evaluation(
     decision_step: int = 12,
     last_days: float | None = None,
     minimum_sample: int = 30,
+    profile: str | None = None,
+    set_latest: bool | None = None,
 ) -> dict[str, Any]:
-    """Run a backtest on stored history and save the win-rate report."""
+    """Run a backtest on stored history and save the win-rate report.
+
+    profile names a strategy profile (config/strategy_profiles.yaml).
+    Without a profile the original rules run. A profile's report is only
+    made the dashboard's report when set_latest is true.
+    """
 
     import pandas as pd
 
@@ -685,6 +692,21 @@ def run_backtest_evaluation(
         raise ApplicationError("target must be 1, 2 or 3 (TP1-TP3).")
 
     normalized_pair = _validate_pair(pair)
+
+    from trader.strategy_profile import (
+        StrategyProfileError,
+        get_profile,
+    )
+
+    try:
+        selected_profile = (
+            get_profile(profile) if profile is not None else None
+        )
+    except StrategyProfileError as exc:
+        raise ApplicationError(str(exc)) from exc
+
+    if set_latest is None:
+        set_latest = profile is None
 
     # Prefer imported long history; fall back to collected raw data.
     directory = (
@@ -724,9 +746,10 @@ def run_backtest_evaluation(
             target_index=target - 1,
             decision_step=decision_step,
             minimum_sample=minimum_sample,
+            profile=selected_profile,
         )
 
-        path = save_performance_report(report)
+        path = save_performance_report(report, set_latest=set_latest)
 
     except (
         BacktestingDataError,
@@ -745,6 +768,10 @@ def run_backtest_evaluation(
         "data_directory": directory or "data/raw/market/ohlcv",
         "period": report["period"],
         "target": report["target"],
+        "profile": report["profile"]["name"],
+        "activation_gate": report["activation_gate"],
+        "walk_forward": report["walk_forward"],
+        "confidence_check": report["confidence_check"],
         "overall": report["overall"],
         "out_of_sample": report["out_of_sample"],
         "by_direction": report["by_direction"],
@@ -905,6 +932,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Check for a signal every N five-minute candles.",
     )
     backtest_parser.add_argument(
+        "--profile",
+        default=None,
+        help="Strategy profile from config/strategy_profiles.yaml.",
+    )
+    backtest_parser.add_argument(
+        "--set-latest",
+        action="store_true",
+        help="Make this report the one the dashboard shows.",
+    )
+    backtest_parser.add_argument(
         "--last-days",
         type=float,
         default=None,
@@ -993,6 +1030,8 @@ def main(
                 target=arguments.target,
                 decision_step=arguments.step,
                 last_days=arguments.last_days,
+                profile=arguments.profile,
+                set_latest=(True if arguments.set_latest else None),
             )
 
         elif arguments.command == "dashboard":
