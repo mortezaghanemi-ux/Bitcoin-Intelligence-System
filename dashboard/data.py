@@ -754,6 +754,40 @@ def _section_status(
     return "INVALID"
 
 
+def _load_live_performance(
+    *,
+    history_path,
+    candle_directory,
+    pair,
+    backtest,
+    now,
+) -> dict[str, Any]:
+    from trader.live_tracking import build_live_performance
+
+    directory = (
+        Path(candle_directory)
+        if candle_directory is not None
+        else DEFAULT_CANDLE_DIRECTORY
+    )
+
+    try:
+        return build_live_performance(
+            history_path=(
+                history_path
+                if history_path is not None
+                else DEFAULT_SIGNAL_HISTORY_PATH
+            ),
+            candle_path=directory / f"kraken_{pair.upper()}_5m.jsonl",
+            backtest=backtest,
+            now=now,
+        )
+    except Exception as error:  # never break the dashboard
+        return {
+            "status": "INVALID",
+            "message": f"Live tracking failed: {error}",
+        }
+
+
 def load_dashboard_data(
     *,
     pair: str = "XBTUSD",
@@ -796,6 +830,14 @@ def load_dashboard_data(
 
     performance = load_performance(
         performance_directory=performance_directory,
+    )
+
+    live_performance = _load_live_performance(
+        history_path=history_path,
+        candle_directory=candle_directory,
+        pair=pair,
+        backtest=performance.get("report"),
+        now=checked_at,
     )
 
     trading["signals"] = _attach_historical_performance(
@@ -878,6 +920,7 @@ def load_dashboard_data(
         },
         "data_quality": data_quality,
         "performance": performance,
+        "live_performance": live_performance,
         "limitations": [
             "Dashboard data is read-only.",
             "Win rates are measured on past data by simulation and are not predictions.",

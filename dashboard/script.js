@@ -716,6 +716,97 @@ function describeHistoricalPerformance(performance) {
 }
 
 
+const LIVE_STATUS_TEXT = {
+    INSUFFICIENT_SAMPLE: "نمونه زنده هنوز کافی نیست",
+    CONSISTENT: "نتیجه زنده با بک‌تست سازگار است",
+    UNDERPERFORMING: "عملکرد زنده ضعیف است؛ سیگنال‌ها متوقف‌شده فرض شوند",
+    WORSE_THAN_BACKTEST: "عملکرد زنده بدتر از بک‌تست است؛ سیگنال‌ها متوقف‌شده فرض شوند"
+};
+
+function renderLivePerformance(snapshot) {
+    const container = document.getElementById("performance-content");
+
+    if (!container) {
+        return;
+    }
+
+    const gate = snapshot.performance?.report?.activation_gate;
+
+    if (gate) {
+        const gateLine = createElement(
+            "p",
+            "",
+            gate.passed
+                ? "شرط فعال‌سازی: قبول (مزیت در بک‌تست اندازه‌گیری شد)"
+                : "شرط فعال‌سازی: رد (مزیت قابل‌اتکا در بک‌تست ثابت نشد)"
+        );
+        gateLine.style.fontWeight = "700";
+        gateLine.style.color = gate.passed
+            ? "var(--success)"
+            : "var(--danger)";
+        container.appendChild(gateLine);
+    }
+
+    const live = snapshot.live_performance;
+
+    if (!live || live.status !== "AVAILABLE") {
+        container.appendChild(
+            createElement(
+                "p",
+                "empty-state",
+                "هنوز نتیجه زنده‌ای برای سیگنال‌های صادرشده ثبت نشده است."
+            )
+        );
+        return;
+    }
+
+    const summary = live.summary || {};
+    const comparison = live.comparison || {};
+    const profit = summary.profit_factor === null ||
+        summary.profit_factor === undefined
+        ? "—"
+        : formatNumber(summary.profit_factor, 2);
+
+    container.appendChild(
+        createElement(
+            "h3",
+            "",
+            "نتیجه سیگنال‌های واقعی (پس از صدور)"
+        )
+    );
+
+    const line = createElement(
+        "p",
+        "",
+        `تمام‌شده: ${summary.resolved} (برد ${summary.wins}، باخت ${summary.losses})، ` +
+        `باز: ${summary.open}، درصد برد: ` +
+        `${summary.win_rate_pct === null ? "—" : formatNumber(summary.win_rate_pct, 1) + "٪"}، ` +
+        `ضریب سود: ${profit}`
+    );
+    container.appendChild(line);
+
+    const status = createElement(
+        "p",
+        "",
+        LIVE_STATUS_TEXT[comparison.status] || comparison.message || ""
+    );
+    status.style.color = comparison.signals_paused
+        ? "var(--danger)"
+        : "var(--warning)";
+    status.style.fontWeight = "700";
+    container.appendChild(status);
+
+    container.appendChild(
+        createElement(
+            "p",
+            "empty-state",
+            "کارمزد و لغزش قیمت در این پیگیری لحاظ نشده؛ نتیجه کمی خوش‌بینانه‌تر از واقعیت است."
+        )
+    );
+}
+
+let livePaused = false;
+
 function describeEdgeVerdict(performance) {
     if (performance?.edge_verdict !== "NO_EDGE_MEASURED") {
         return "";
@@ -985,6 +1076,17 @@ function buildSignalCard(signal, livePrice) {
 
     const live = describeSignalLiveStatus(signal, livePrice);
 
+    if (livePaused) {
+        const paused = createElement(
+            "p",
+            "",
+            "هشدار: عملکرد زنده این سیستم ضعیف بوده؛ سیگنال را اجرا نکنید."
+        );
+        paused.style.color = "var(--danger)";
+        paused.style.fontWeight = "700";
+        card.appendChild(paused);
+    }
+
     const rows = [
         ["جهت", `${isLong ? "🟢 LONG" : "🔴 SHORT"}`],
         ["تایم‌فریم اجرا", signal.timeframe || "—"],
@@ -1191,9 +1293,13 @@ function renderDashboard(snapshot) {
         snapshot.forecast
     );
 
+    livePaused = Boolean(
+        snapshot.live_performance?.comparison?.signals_paused
+    );
     renderTrading(snapshot.trading || {});
 
     renderPerformance(snapshot.performance || {});
+    renderLivePerformance(snapshot);
 
     renderReportSection(
         "quality-content",
