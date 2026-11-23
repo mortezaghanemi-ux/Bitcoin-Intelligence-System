@@ -362,6 +362,40 @@ def lookup_signal_performance(
     )
 
 
+def edge_verdict(performance: dict[str, Any]) -> str:
+    """Say whether the measured history shows the rules making money.
+
+    NO_EDGE_MEASURED: the profit factor is below 1 overall or in the
+    out-of-sample part (losses exceeded wins after costs).
+    EDGE_MEASURED: both are above 1 and the sample is sufficient.
+    UNCLEAR: anything else, such as too few trades.
+    """
+
+    overall = performance.get("overall", {})
+    out = performance.get("out_of_sample", {})
+
+    pf_all = overall.get("profit_factor")
+    pf_out = out.get("profit_factor")
+
+    if pf_all is not None and pf_all < 1:
+        return "NO_EDGE_MEASURED"
+
+    if pf_out is not None and out.get("trades", 0) and pf_out < 1:
+        return "NO_EDGE_MEASURED"
+
+    if (
+        pf_all is not None
+        and pf_all > 1
+        and pf_out is not None
+        and pf_out > 1
+        and overall.get("sample_status") == "SUFFICIENT"
+        and out.get("sample_status") == "SUFFICIENT"
+    ):
+        return "EDGE_MEASURED"
+
+    return "UNCLEAR"
+
+
 def _lookup_result(
     performance: dict[str, Any],
     scope: str,
@@ -375,6 +409,20 @@ def _lookup_result(
         "win_rate_pct": group["win_rate_pct"],
         "win_rate_ci95_pct": group["win_rate_ci95_pct"],
         "trades": group["trades"],
+        "profit_factor": group.get("profit_factor"),
+        "overall_profit_factor": performance["overall"].get(
+            "profit_factor"
+        ),
+        "out_of_sample_profit_factor": performance.get(
+            "out_of_sample", {}
+        ).get("profit_factor"),
+        "total_return_pct": performance.get("risk", {}).get(
+            "total_return_pct"
+        ),
+        "maximum_drawdown_pct": performance.get("risk", {}).get(
+            "maximum_drawdown_pct"
+        ),
+        "edge_verdict": edge_verdict(performance),
         "period_days": performance.get("period", {}).get("days"),
         "generated_at": performance.get("generated_at"),
         "disclaimer": DISCLAIMER,

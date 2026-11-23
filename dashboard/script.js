@@ -690,6 +690,8 @@ function describeHistoricalPerformance(performance) {
         };
     }
 
+    const verdictNote = describeEdgeVerdict(performance);
+
     const interval = Array.isArray(performance.win_rate_ci95_pct)
         ? ` (بازه اطمینان ۹۵٪: ${formatNumber(performance.win_rate_ci95_pct[0], 0)} تا ` +
           `${formatNumber(performance.win_rate_ci95_pct[1], 0)})`
@@ -703,11 +705,29 @@ function describeHistoricalPerformance(performance) {
 
     return {
         text,
-        warning: performance.status !== "MEASURED",
-        note: performance.status !== "MEASURED"
-            ? "تعداد نمونه کم است؛ این عدد قابل اتکا نیست."
-            : "این عدد اندازه‌گیری گذشته است، نه تضمین آینده."
+        warning:
+            performance.status !== "MEASURED" ||
+            performance.edge_verdict === "NO_EDGE_MEASURED",
+        note: verdictNote ||
+            (performance.status !== "MEASURED"
+                ? "تعداد نمونه کم است؛ این عدد قابل اتکا نیست."
+                : "این عدد اندازه‌گیری گذشته است، نه تضمین آینده.")
     };
+}
+
+
+function describeEdgeVerdict(performance) {
+    if (performance?.edge_verdict !== "NO_EDGE_MEASURED") {
+        return "";
+    }
+
+    return (
+        "هشدار: در بک‌تست گذشته، این قوانین سودده نبوده‌اند " +
+        `(ضریب سود ${formatNumber(performance.overall_profit_factor, 2)}، ` +
+        `بازده کل ${formatPercentValue(performance.total_return_pct)}، ` +
+        `بیشینه افت ${formatPercentValue(performance.maximum_drawdown_pct)}). ` +
+        "درصد برد به‌تنهایی نشانه سودآوری نیست."
+    );
 }
 
 
@@ -721,6 +741,7 @@ function renderPerformanceTable(report) {
         "گروه",
         "تعداد معامله",
         "وین‌ریت",
+        "ضریب سود",
         "بازه اطمینان ۹۵٪",
         "وضعیت نمونه"
     ]) {
@@ -762,6 +783,16 @@ function renderPerformanceTable(report) {
         );
         row.appendChild(
             createElement("td", "", formatPercentValue(group.win_rate_pct))
+        );
+        row.appendChild(
+            createElement(
+                "td",
+                "",
+                group.profit_factor === null ||
+                group.profit_factor === undefined
+                    ? "—"
+                    : formatNumber(group.profit_factor, 2)
+            )
         );
         row.appendChild(createElement("td", "", interval));
         row.appendChild(
@@ -812,6 +843,23 @@ function renderPerformance(performance) {
     }
 
     const period = report.period || {};
+
+    const reportVerdict = describeEdgeVerdict({
+        edge_verdict: report.overall?.profit_factor < 1 ||
+            report.out_of_sample?.profit_factor < 1
+            ? "NO_EDGE_MEASURED"
+            : "OTHER",
+        overall_profit_factor: report.overall?.profit_factor,
+        total_return_pct: report.risk?.total_return_pct,
+        maximum_drawdown_pct: report.risk?.maximum_drawdown_pct
+    });
+
+    if (reportVerdict) {
+        const banner = createElement("p", "", reportVerdict);
+        banner.style.color = "var(--danger)";
+        banner.style.fontWeight = "700";
+        container.appendChild(banner);
+    }
 
     container.appendChild(
         createElement(
