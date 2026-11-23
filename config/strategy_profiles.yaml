@@ -11,7 +11,7 @@
 #   higher_timeframe_bias / maximum_pullback_atr ... entry location
 #   blackout_windows ... scheduled-event pauses
 
-active: h1_base
+active: h4_base
 
 profiles:
   baseline:
