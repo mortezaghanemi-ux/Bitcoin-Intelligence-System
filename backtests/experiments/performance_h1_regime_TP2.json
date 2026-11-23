@@ -1,0 +1,233 @@
+{
+  "status": "COMPLETED",
+  "generated_at": "2026-11-23T07:46:21.829757+00:00",
+  "pair": "XBTUSD",
+  "profile": {
+    "allowed_regimes": [
+      "TRENDING"
+    ],
+    "blackout_windows": [],
+    "description": "1h levels, only in a trending 4h regime.",
+    "execution_timeframe": "1h",
+    "fill_timeframe": "5m",
+    "higher_timeframe_bias": null,
+    "maximum_pullback_atr": null,
+    "minimum_adx": null,
+    "minimum_confidence": 60.0,
+    "minimum_risk_reward": 1.5,
+    "name": "h1_regime",
+    "regime_timeframe": "4h",
+    "require_regime_direction": false,
+    "stop_atr_multiplier": 1.5
+  },
+  "execution_timeframe": "5m",
+  "target": "TP2",
+  "period": {
+    "start": "2025-11-02T00:10:00+00:00",
+    "end": "2026-10-01T00:00:00+00:00",
+    "days": 332.99,
+    "in_sample_until": "2026-06-23T02:27:00+00:00"
+  },
+  "minimum_sample_size": 30,
+  "overall": {
+    "trades": 67,
+    "wins": 34,
+    "losses": 33,
+    "breakeven": 0,
+    "win_rate_pct": 50.75,
+    "win_rate_ci95_pct": [
+      39.06,
+      62.35
+    ],
+    "profit_factor": 1.3165,
+    "expectancy_per_trade": 8.38135786,
+    "sample_status": "SUFFICIENT"
+  },
+  "in_sample": {
+    "trades": 57,
+    "wins": 28,
+    "losses": 29,
+    "breakeven": 0,
+    "win_rate_pct": 49.12,
+    "win_rate_ci95_pct": [
+      36.62,
+      61.74
+    ],
+    "profit_factor": 1.2822,
+    "expectancy_per_trade": 7.68909604,
+    "sample_status": "SUFFICIENT"
+  },
+  "out_of_sample": {
+    "trades": 10,
+    "wins": 6,
+    "losses": 4,
+    "breakeven": 0,
+    "win_rate_pct": 60.0,
+    "win_rate_ci95_pct": [
+      31.27,
+      83.18
+    ],
+    "profit_factor": 1.5565,
+    "expectancy_per_trade": 12.32725023,
+    "sample_status": "INSUFFICIENT_SAMPLE"
+  },
+  "by_direction": {
+    "LONG": {
+      "trades": 37,
+      "wins": 16,
+      "losses": 21,
+      "breakeven": 0,
+      "win_rate_pct": 43.24,
+      "win_rate_ci95_pct": [
+        28.67,
+        59.09
+      ],
+      "profit_factor": 1.0069,
+      "expectancy_per_trade": 0.20974014,
+      "sample_status": "SUFFICIENT"
+    },
+    "SHORT": {
+      "trades": 30,
+      "wins": 18,
+      "losses": 12,
+      "breakeven": 0,
+      "win_rate_pct": 60.0,
+      "win_rate_ci95_pct": [
+        42.32,
+        75.41
+      ],
+      "profit_factor": 1.8591,
+      "expectancy_per_trade": 18.45968637,
+      "sample_status": "SUFFICIENT"
+    }
+  },
+  "by_confidence": {
+    "60-69": {
+      "trades": 5,
+      "wins": 1,
+      "losses": 4,
+      "breakeven": 0,
+      "win_rate_pct": 20.0,
+      "win_rate_ci95_pct": [
+        3.62,
+        62.45
+      ],
+      "profit_factor": 0.2904,
+      "expectancy_per_trade": -31.01955483,
+      "sample_status": "INSUFFICIENT_SAMPLE"
+    },
+    "70-79": {
+      "trades": 8,
+      "wins": 3,
+      "losses": 5,
+      "breakeven": 0,
+      "win_rate_pct": 37.5,
+      "win_rate_ci95_pct": [
+        13.68,
+        69.43
+      ],
+      "profit_factor": 0.8356,
+      "expectancy_per_trade": -5.51959792,
+      "sample_status": "INSUFFICIENT_SAMPLE"
+    },
+    "80-100": {
+      "trades": 54,
+      "wins": 30,
+      "losses": 24,
+      "breakeven": 0,
+      "win_rate_pct": 55.56,
+      "win_rate_ci95_pct": [
+        42.38,
+        68.0
+      ],
+      "profit_factor": 1.5911,
+      "expectancy_per_trade": 14.08899137,
+      "sample_status": "SUFFICIENT"
+    }
+  },
+  "by_exit_reason": {
+    "TAKE_PROFIT": 33,
+    "STOP_LOSS": 33,
+    "END_OF_BACKTEST": 1
+  },
+  "risk": {
+    "total_return_pct": 5.61551,
+    "maximum_drawdown_pct": 2.130908,
+    "profit_factor": 1.31647854
+  },
+  "assumptions": {
+    "fee_rate": 0.0006,
+    "slippage_bps": 2.0,
+    "leverage": 1.0,
+    "decision_step_candles": 12
+  },
+  "limitations": [
+    "This is a candle-based simulation, not an exchange execution replay.",
+    "Entry is simulated at the next candle open.",
+    "Only take-profit target TP2 is used.",
+    "Stop loss is prioritized when both exit levels are touched in one candle.",
+    "Funding payments and exchange-specific liquidation rules are not modeled.",
+    "Trading fees and slippage are estimates supplied to the engine.",
+    "No real orders are placed.",
+    "Measured on past data by simulation. It is not a prediction, and future results can differ."
+  ],
+  "walk_forward": {
+    "folds": [
+      {
+        "from": "2025-11-15T12:05:00+00:00",
+        "to": "2026-01-27T21:05:00+00:00",
+        "trades": 16,
+        "win_rate_pct": 43.75,
+        "profit_factor": 1.0727,
+        "net_pnl": 34.65636147
+      },
+      {
+        "from": "2026-01-29T20:05:00+00:00",
+        "to": "2026-03-19T11:05:00+00:00",
+        "trades": 16,
+        "win_rate_pct": 56.25,
+        "profit_factor": 1.7234,
+        "net_pnl": 266.80581539
+      },
+      {
+        "from": "2026-03-22T22:05:00+00:00",
+        "to": "2026-05-23T21:05:00+00:00",
+        "trades": 16,
+        "win_rate_pct": 37.5,
+        "profit_factor": 0.7619,
+        "net_pnl": -129.2636453
+      },
+      {
+        "from": "2026-05-29T01:05:00+00:00",
+        "to": "2026-09-23T16:05:00+00:00",
+        "trades": 19,
+        "win_rate_pct": 63.16,
+        "profit_factor": 2.0094,
+        "net_pnl": 389.35244476
+      }
+    ],
+    "profitable_folds": 3,
+    "fold_count": 4
+  },
+  "confidence_check": {
+    "status": "INSUFFICIENT_SAMPLE",
+    "correlation": null,
+    "informative": false
+  },
+  "activation_gate": {
+    "passed": false,
+    "checks": {
+      "overall_trades": true,
+      "overall_profit_factor": true,
+      "out_of_sample_trades": false,
+      "out_of_sample_profit_factor": true,
+      "walk_forward_consistency": true
+    },
+    "rules": {
+      "minimum_profit_factor": 1.2,
+      "minimum_trades": 30,
+      "minimum_out_of_sample_trades": 15,
+      "minimum_profitable_folds": "3 of 4"
+    }
+  }
+}
