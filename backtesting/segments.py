@@ -66,7 +66,7 @@ def run_shard(
 
     from backtesting.data import load_backtest_data
     from backtesting.engine import run_backtest
-    from trader.signal_engine.engine import TradingSignalEngine
+    from trader.strategy_profile import build_engine
 
     index = load_index(root)
     lower = pd.Timestamp(start, tz="UTC") if start else None
@@ -97,11 +97,7 @@ def run_shard(
                 start_time=window[0].to_pydatetime(),
                 end_time=window[1].to_pydatetime(),
             )
-            engine = (
-                TradingSignalEngine(profile=profile)
-                if profile is not None
-                else None
-            )
+            engine = build_engine(profile)
             result = run_backtest(
                 data,
                 signal_engine=engine,

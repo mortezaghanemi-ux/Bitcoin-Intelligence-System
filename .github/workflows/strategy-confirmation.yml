@@ -68,7 +68,7 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        profile: [baseline, h1_base, h1_regime, h1_regime_di]
+        profile: [baseline, h1_base, h1_regime, h1_regime_di, h4_base, donchian20, donchian55]
         year: [2020, 2021, 2022, 2023, 2024, 2025, 2026]
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +117,7 @@ jobs:
           merge-multiple: true
       - name: Score every profile
         run: |
-          for profile in baseline h1_base h1_regime h1_regime_di; do
+          for profile in baseline h1_base h1_regime h1_regime_di h4_base donchian20 donchian55; do
             python main.py evaluate-shards --inputs shards \
               --profile "$profile" --target 2 \
               --holdout-before "${{ inputs.holdout_before }}" \

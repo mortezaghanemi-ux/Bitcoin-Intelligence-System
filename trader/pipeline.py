@@ -193,6 +193,12 @@ class TradingPipeline:
                 f"Invalid strategy profile configuration: {exc}"
             ) from exc
 
+        if profile.engine != "confluence":
+            raise TradingPipelineError(
+                f"Profile {profile.name} uses the {profile.engine} "
+                "engine, which is backtest-only."
+            )
+
         if profile.name != "baseline":
             return TradingSignalEngine(
                 minimum_candles=30,

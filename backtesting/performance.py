@@ -649,9 +649,9 @@ def run_performance_evaluation(
     fill_timeframe = "5m"
 
     if profile is not None:
-        from trader.signal_engine.engine import TradingSignalEngine
+        from trader.strategy_profile import build_engine
 
-        signal_engine = TradingSignalEngine(profile=profile)
+        signal_engine = build_engine(profile)
         fill_timeframe = profile.fill_timeframe
 
     result = run_backtest(

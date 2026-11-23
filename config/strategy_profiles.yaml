@@ -62,3 +62,22 @@ profiles:
     higher_timeframe_bias: 4h
     maximum_pullback_atr: 1.0
     stop_atr_multiplier: 2.0
+
+  # --- Pre-registered second round (see the confirmation workflow) ---
+  h4_base:
+    description: Same rules, levels built from the 4h timeframe.
+    execution_timeframe: 4h
+
+  donchian20:
+    description: 4h Donchian 20-candle breakout, 2 ATR stop, 3R target.
+    engine: donchian
+    execution_timeframe: 4h
+    breakout_channel: 20
+    breakout_stop_atr: 2.0
+
+  donchian55:
+    description: 4h Donchian 55-candle breakout, 2 ATR stop, 3R target.
+    engine: donchian
+    execution_timeframe: 4h
+    breakout_channel: 55
+    breakout_stop_atr: 2.0

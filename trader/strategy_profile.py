@@ -57,6 +57,13 @@ class StrategyProfile:
     higher_timeframe_bias: str | None = None
     maximum_pullback_atr: float | None = None
 
+    # Which signal generator: the confluence engine or the simple
+    # Donchian breakout (trader/breakout_engine.py).
+    engine: str = "confluence"
+    breakout_channel: int = 20
+    breakout_stop_atr: float = 2.0
+    breakout_targets_r: tuple[float, ...] = (1.5, 2.0, 3.0)
+
     # Layer 5: scheduled-event blackout, as (start, end) ISO times.
     blackout_windows: tuple[tuple[str, str], ...] = field(
         default_factory=tuple
@@ -85,6 +92,12 @@ class StrategyProfile:
         for regime in self.allowed_regimes:
             if regime not in REGIMES:
                 raise StrategyProfileError(f"Unknown regime: {regime}")
+
+        if self.engine not in ("confluence", "donchian"):
+            raise StrategyProfileError(f"Unknown engine: {self.engine}")
+
+        if self.breakout_channel < 5 or self.breakout_stop_atr <= 0:
+            raise StrategyProfileError("Invalid breakout settings.")
 
         if not 0 <= self.minimum_confidence <= 100:
             raise StrategyProfileError(
@@ -138,7 +151,8 @@ def profile_from_mapping(
         "stop_atr_multiplier", "allowed_regimes", "regime_timeframe",
         "require_regime_direction", "minimum_adx",
         "higher_timeframe_bias", "maximum_pullback_atr",
-        "blackout_windows",
+        "blackout_windows", "engine", "breakout_channel",
+        "breakout_stop_atr", "breakout_targets_r",
     }
     unknown = set(mapping) - allowed
 
@@ -149,6 +163,9 @@ def profile_from_mapping(
 
     values = dict(mapping)
     values["allowed_regimes"] = tuple(values.get("allowed_regimes", ()))
+    values["breakout_targets_r"] = tuple(
+        float(x) for x in values.get("breakout_targets_r", (1.5, 2.0, 3.0))
+    )
     values["blackout_windows"] = tuple(
         tuple(item) for item in values.get("blackout_windows", ())
     )
@@ -185,6 +202,27 @@ def load_profiles(
         raise StrategyProfileError(f"Active profile {active} is not defined.")
 
     return profiles, active
+
+
+def build_engine(profile: StrategyProfile | None):
+    """Create the signal generator a profile asks for."""
+
+    from trader.signal_engine.engine import TradingSignalEngine
+
+    if profile is None:
+        return None
+
+    if profile.engine == "donchian":
+        from trader.breakout_engine import DonchianBreakoutEngine
+
+        return DonchianBreakoutEngine(
+            timeframe=profile.execution_timeframe,
+            channel=profile.breakout_channel,
+            stop_atr=profile.breakout_stop_atr,
+            targets_r=profile.breakout_targets_r,
+        )
+
+    return TradingSignalEngine(profile=profile)
 
 
 def get_profile(
