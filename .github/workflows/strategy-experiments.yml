@@ -1,0 +1,133 @@
+name: Bitcoin Intelligence Strategy Experiments
+
+# Backtests every strategy profile (and TP1/TP2) on multi-year Kraken
+# history in parallel, then publishes one comparison table. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      last_days:
+        description: "Use only the most recent N days of history"
+        default: "730"
+      step:
+        description: "Check for a signal every N five-minute candles (12 = hourly)"
+        default: "12"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bitcoin-intelligence-experiments
+  cancel-in-progress: false
+
+env:
+  DATA_BRANCH: runtime-data
+
+jobs:
+  history:
+    name: Download history once
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - name: Read XBTUSD 5m from the full Kraken archive
+        run: |
+          mkdir -p history
+          python -m backtesting.remote_zip history/XBTUSD_5.csv
+          wc -l history/XBTUSD_5.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kraken-xbtusd-5m
+          path: history/XBTUSD_5.csv
+          retention-days: 3
+
+  experiment:
+    name: ${{ matrix.profile }} TP${{ matrix.target }}
+    needs: history
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        profile:
+          - baseline
+          - h1_base
+          - h1_regime
+          - h1_regime_di
+          - h1_htf
+          - h1_pullback
+          - h1_trend_pullback
+          - h1_trend_pullback_wide
+        target: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: kraken-xbtusd-5m
+          path: history
+      - name: Import history
+        run: python main.py import-history history/XBTUSD_5.csv --pair XBTUSD
+      - name: Backtest
+        run: |
+          python main.py backtest --profile "${{ matrix.profile }}" \
+            --target "${{ matrix.target }}" \
+            --step "${{ inputs.step }}" --last-days "${{ inputs.last_days }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.profile }}-TP${{ matrix.target }}
+          path: data/backtests/performance_${{ matrix.profile }}_TP${{ matrix.target }}.json
+          retention-days: 30
+
+  summary:
+    name: Compare and publish
+    needs: experiment
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: reports
+          merge-multiple: true
+      - name: Build comparison table
+        run: |
+          python -m backtesting.experiment_summary reports | tee summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish to runtime-data
+        run: |
+          set -euo pipefail
+          store="$RUNNER_TEMP/data-store"
+          git clone --quiet --depth 1 --branch "$DATA_BRANCH" \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "$store"
+          mkdir -p "$store/backtests/experiments"
+          cp reports/*.json "$store/backtests/experiments/"
+          cp summary.md "$store/backtests/experiments/SUMMARY.md"
+          cd "$store"
+          git config user.name "bitcoin-intelligence-bot"
+          git config user.email "bitcoin-intelligence-bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit --quiet -m "data: strategy experiments $(date -u +%Y-%m-%dT%H:%MZ)"
+          for attempt in 1 2 3 4 5; do
+            git push --quiet origin "HEAD:$DATA_BRANCH" && exit 0
+            git pull --quiet --rebase origin "$DATA_BRANCH" || true
+          done
+          exit 1

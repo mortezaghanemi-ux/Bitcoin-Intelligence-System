@@ -436,6 +436,7 @@ def _build_signal_identity(
     risk_fraction: float = 0.005,
     maintenance_margin_rate: float = 0.005,
     execution_timeframe: str = "5m",
+    profile_fingerprint: str = "",
 ) -> str:
     identity: dict[str, list[dict[str, Any]]] = {}
 
@@ -478,6 +479,9 @@ def _build_signal_identity(
             "execution_timeframe": execution_timeframe,
         },
     }
+
+    if profile_fingerprint:
+        payload["engine_parameters"]["profile"] = profile_fingerprint
 
     encoded = json.dumps(
         payload,
@@ -706,6 +710,7 @@ def _build_risk_levels(
     candles: pd.DataFrame,
     atr: float,
     minimum_risk_reward: float,
+    stop_atr_multiplier: float = 1.5,
 ) -> dict[str, Any]:
     current_price = float(candles["close"].iloc[-1])
     recent = candles.tail(min(14, len(candles)))
@@ -718,7 +723,7 @@ def _build_risk_levels(
         entry_upper = current_price
 
         structural_stop = float(recent["low"].min()) - buffer
-        volatility_stop = entry_lower - (atr * 1.5)
+        volatility_stop = entry_lower - (atr * stop_atr_multiplier)
 
         stop_loss = min(structural_stop, volatility_stop)
         risk = entry_upper - stop_loss
@@ -743,7 +748,7 @@ def _build_risk_levels(
         entry_upper = current_price + entry_width
 
         structural_stop = float(recent["high"].max()) + buffer
-        volatility_stop = entry_upper + (atr * 1.5)
+        volatility_stop = entry_upper + (atr * stop_atr_multiplier)
 
         stop_loss = max(structural_stop, volatility_stop)
         risk = stop_loss - entry_lower
@@ -945,7 +950,14 @@ class TradingSignalEngine:
         maintenance_margin_rate: float = 0.005,
         execution_timeframe: str = "5m",
         analysis_window: int | None = 120,
+        profile: Any = None,
     ) -> None:
+        if profile is not None:
+            # A profile overrides the matching engine parameters.
+            execution_timeframe = profile.execution_timeframe
+            minimum_confidence = profile.minimum_confidence
+            minimum_risk_reward = profile.minimum_risk_reward
+
         if analysis_window is not None and (
             isinstance(analysis_window, bool)
             or not isinstance(analysis_window, int)
@@ -981,6 +993,12 @@ class TradingSignalEngine:
             maintenance_margin_rate
         )
         self.execution_timeframe = execution_timeframe
+        self.profile = profile
+        self.stop_atr_multiplier = (
+            float(profile.stop_atr_multiplier)
+            if profile is not None
+            else 1.5
+        )
 
         # Only the newest candles of each timeframe are analysed. This
         # keeps live signals and backtests identical by construction,
@@ -1078,6 +1096,11 @@ class TradingSignalEngine:
             risk_fraction=self.risk_fraction,
             maintenance_margin_rate=self.maintenance_margin_rate,
             execution_timeframe=self.execution_timeframe,
+            profile_fingerprint=(
+                self.profile.fingerprint()
+                if self.profile is not None
+                else ""
+            ),
         )
 
         signal_id = hashlib.sha256(
@@ -1252,6 +1275,25 @@ class TradingSignalEngine:
                 "Market structure conflicts with the multi-timeframe direction."
             )
 
+        profile_details = None
+
+        if self.profile is not None and not rejection_reasons:
+            from trader.strategy_profile import evaluate_filters
+
+            profile_reasons, profile_details = evaluate_filters(
+                self.profile,
+                analysis_time=timestamp.to_pydatetime(),
+                candles_by_timeframe=candles_by_timeframe,
+                overall_direction=overall_direction,
+                timeframe_directions={
+                    name: _direction(value)
+                    for name, value in alignment_directions.items()
+                },
+                execution_candles=execution_candles,
+                atr=_calculate_atr(execution_candles),
+            )
+            rejection_reasons.extend(profile_reasons)
+
         if rejection_reasons:
             signal_type = "NO_TRADE"
             risk_levels = None
@@ -1275,6 +1317,7 @@ class TradingSignalEngine:
                     execution_candles,
                     atr,
                     self.minimum_risk_reward,
+                    self.stop_atr_multiplier,
                 )
 
                 risk_calculation = _calculate_position_risk(
@@ -1542,7 +1585,13 @@ class TradingSignalEngine:
                 "applied_leverage": float(leverage),
                 "risk_fraction": self.risk_fraction,
                 "execution_timeframe": self.execution_timeframe,
+                "profile": (
+                    self.profile.name
+                    if self.profile is not None
+                    else None
+                ),
             },
+            "profile_diagnostics": profile_details,
             "execution": {
                 "manual_review_only": True,
                 "auto_trading": False,

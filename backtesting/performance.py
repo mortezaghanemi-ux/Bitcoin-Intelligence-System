@@ -42,8 +42,148 @@ DISCLAIMER = (
 )
 
 
+# Activation gate: the rules count as having a measured edge only when
+# every check passes. Anything else is shown as "no edge proven".
+GATE_MINIMUM_PROFIT_FACTOR = 1.2
+GATE_MINIMUM_TRADES = 30
+GATE_MINIMUM_OUT_OF_SAMPLE_TRADES = 15
+WALK_FORWARD_FOLDS = 4
+GATE_MINIMUM_PROFITABLE_FOLDS = 3
+
+
 class PerformanceError(RuntimeError):
     """Raised when performance evaluation fails."""
+
+
+def walk_forward_folds(
+    trades: list[dict[str, Any]],
+    folds: int = WALK_FORWARD_FOLDS,
+) -> dict[str, Any]:
+    """Split trades in time order into equal groups and score each.
+
+    A rule set that only works in one stretch of history shows up as
+    one good fold and several bad ones.
+    """
+
+    ordered = sorted(trades, key=lambda t: t["decision_time"])
+    size = len(ordered) // folds if folds else 0
+    results = []
+
+    if size == 0:
+        return {"folds": [], "profitable_folds": 0, "fold_count": folds}
+
+    for index in range(folds):
+        start = index * size
+        end = (index + 1) * size if index < folds - 1 else len(ordered)
+        summary = summarize_trades(ordered[start:end], minimum_sample=1)
+        results.append(
+            {
+                "from": ordered[start]["decision_time"],
+                "to": ordered[end - 1]["decision_time"],
+                "trades": summary["trades"],
+                "win_rate_pct": summary["win_rate_pct"],
+                "profit_factor": summary["profit_factor"],
+                "net_pnl": round(
+                    math.fsum(
+                        t["net_pnl"] for t in ordered[start:end]
+                    ),
+                    8,
+                ),
+            }
+        )
+
+    profitable = sum(1 for fold in results if fold["net_pnl"] > 0)
+
+    return {
+        "folds": results,
+        "profitable_folds": profitable,
+        "fold_count": folds,
+    }
+
+
+def confidence_informativeness(
+    trades: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Check whether a higher confidence score really wins more often."""
+
+    pairs = [
+        (float(t["confidence"]), 1.0 if t["net_pnl"] > 0 else 0.0)
+        for t in trades
+        if isinstance(t.get("confidence"), (int, float))
+    ]
+
+    if len(pairs) < 100:
+        return {
+            "status": "INSUFFICIENT_SAMPLE",
+            "correlation": None,
+            "informative": False,
+        }
+
+    scores = pd.Series([p[0] for p in pairs])
+    wins = pd.Series([p[1] for p in pairs])
+
+    if scores.nunique() < 2 or wins.nunique() < 2:
+        return {
+            "status": "NO_VARIATION",
+            "correlation": None,
+            "informative": False,
+        }
+
+    correlation = float(scores.corr(wins))
+    # About two standard errors for a correlation at this sample size.
+    threshold = 2.0 / math.sqrt(len(pairs))
+
+    return {
+        "status": "MEASURED",
+        "correlation": round(correlation, 4),
+        "informative": correlation > threshold,
+        "threshold": round(threshold, 4),
+    }
+
+
+def activation_gate(report: dict[str, Any]) -> dict[str, Any]:
+    """Apply the rules that decide whether signals may be trusted."""
+
+    overall = report["overall"]
+    out = report["out_of_sample"]
+    folds = report.get("walk_forward", {})
+
+    def pf(group):
+        return group.get("profit_factor")
+
+    checks = {
+        "overall_trades": overall["trades"] >= GATE_MINIMUM_TRADES,
+        "overall_profit_factor": (
+            pf(overall) is not None
+            and pf(overall) >= GATE_MINIMUM_PROFIT_FACTOR
+        ),
+        "out_of_sample_trades": (
+            out["trades"] >= GATE_MINIMUM_OUT_OF_SAMPLE_TRADES
+        ),
+        "out_of_sample_profit_factor": (
+            pf(out) is not None
+            and pf(out) >= GATE_MINIMUM_PROFIT_FACTOR
+        ),
+        "walk_forward_consistency": (
+            folds.get("profitable_folds", 0)
+            >= GATE_MINIMUM_PROFITABLE_FOLDS
+        ),
+    }
+
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "rules": {
+            "minimum_profit_factor": GATE_MINIMUM_PROFIT_FACTOR,
+            "minimum_trades": GATE_MINIMUM_TRADES,
+            "minimum_out_of_sample_trades": (
+                GATE_MINIMUM_OUT_OF_SAMPLE_TRADES
+            ),
+            "minimum_profitable_folds": (
+                f"{GATE_MINIMUM_PROFITABLE_FOLDS} of {WALK_FORWARD_FOLDS}"
+            ),
+        },
+    }
 
 
 def wilson_interval(
@@ -143,6 +283,7 @@ def evaluate_performance(
     train_fraction: float = 0.7,
     minimum_sample: int = MINIMUM_SAMPLE_SIZE,
     generated_at: datetime | None = None,
+    profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a performance report from a completed backtest."""
 
@@ -213,10 +354,11 @@ def evaluate_performance(
 
     moment = generated_at or datetime.now(timezone.utc)
 
-    return {
+    report = {
         "status": "COMPLETED",
         "generated_at": moment.astimezone(timezone.utc).isoformat(),
         "pair": pair,
+        "profile": profile or {"name": "baseline"},
         "execution_timeframe": backtest_result["execution_timeframe"],
         "target": backtest_result["execution"].get("target", "TP1"),
         "period": {
@@ -264,12 +406,21 @@ def evaluate_performance(
         + [DISCLAIMER],
     }
 
+    report["walk_forward"] = walk_forward_folds(trades)
+    report["confidence_check"] = confidence_informativeness(trades)
+    report["activation_gate"] = activation_gate(report)
+
+    return report
+
 
 def save_performance_report(
     report: dict[str, Any],
     directory: str | Path | None = None,
+    *,
+    set_latest: bool = True,
 ) -> Path:
-    """Save the report as latest and keep a timestamped history copy."""
+    """Save a timestamped history copy, a per-profile copy and,
+    optionally, the report the dashboard shows (performance_latest)."""
 
     target = Path(directory or DEFAULT_PERFORMANCE_DIR)
     history = target / "history"
@@ -284,14 +435,21 @@ def save_performance_report(
     )
     text = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False)
 
+    profile_name = report.get("profile", {}).get("name", "baseline")
+
     (history / f"performance_{report['target']}_{stamp}.json").write_text(
         text, encoding="utf-8"
     )
 
-    latest = target / LATEST_FILE
-    latest.write_text(text, encoding="utf-8")
+    per_profile = target / f"performance_{profile_name}_{report['target']}.json"
+    per_profile.write_text(text, encoding="utf-8")
 
-    return latest
+    latest = target / LATEST_FILE
+
+    if set_latest:
+        latest.write_text(text, encoding="utf-8")
+
+    return latest if set_latest else per_profile
 
 
 def load_latest_performance(
@@ -365,10 +523,9 @@ def lookup_signal_performance(
 def edge_verdict(performance: dict[str, Any]) -> str:
     """Say whether the measured history shows the rules making money.
 
-    NO_EDGE_MEASURED: the profit factor is below 1 overall or in the
-    out-of-sample part (losses exceeded wins after costs).
-    EDGE_MEASURED: both are above 1 and the sample is sufficient.
-    UNCLEAR: anything else, such as too few trades.
+    NO_EDGE_MEASURED: profit factor below 1 overall or out of sample.
+    EDGE_MEASURED: the full activation gate passed.
+    UNCLEAR: anything else (too few trades, mixed folds, ...).
     """
 
     overall = performance.get("overall", {})
@@ -383,14 +540,23 @@ def edge_verdict(performance: dict[str, Any]) -> str:
     if pf_out is not None and out.get("trades", 0) and pf_out < 1:
         return "NO_EDGE_MEASURED"
 
-    if (
-        pf_all is not None
-        and pf_all > 1
-        and pf_out is not None
-        and pf_out > 1
-        and overall.get("sample_status") == "SUFFICIENT"
-        and out.get("sample_status") == "SUFFICIENT"
-    ):
+    gate = performance.get("activation_gate")
+
+    if gate is None and "walk_forward" not in performance:
+        # Older reports without a gate: fall back to the simple rule.
+        if (
+            pf_all is not None
+            and pf_all > 1
+            and pf_out is not None
+            and pf_out > 1
+            and overall.get("sample_status") == "SUFFICIENT"
+            and out.get("sample_status") == "SUFFICIENT"
+        ):
+            return "EDGE_MEASURED"
+
+        return "UNCLEAR"
+
+    if gate and gate.get("passed"):
         return "EDGE_MEASURED"
 
     return "UNCLEAR"
@@ -442,11 +608,27 @@ def run_performance_evaluation(
     decision_step: int = 12,
     train_fraction: float = 0.7,
     minimum_sample: int = MINIMUM_SAMPLE_SIZE,
+    profile: Any = None,
 ) -> dict[str, Any]:
-    """Run a backtest on stored candles and return the report."""
+    """Run a backtest on stored candles and return the report.
+
+    A profile selects the signal rules (see trader.strategy_profile).
+    Fills are simulated on the profile's fill timeframe.
+    """
+
+    signal_engine = None
+    fill_timeframe = "5m"
+
+    if profile is not None:
+        from trader.signal_engine.engine import TradingSignalEngine
+
+        signal_engine = TradingSignalEngine(profile=profile)
+        fill_timeframe = profile.fill_timeframe
 
     result = run_backtest(
         data,
+        signal_engine=signal_engine,
+        execution_timeframe=fill_timeframe,
         initial_equity=initial_equity,
         leverage=leverage,
         fee_rate=fee_rate,
@@ -461,4 +643,5 @@ def run_performance_evaluation(
         pair=pair,
         train_fraction=train_fraction,
         minimum_sample=minimum_sample,
+        profile=profile.to_dict() if profile is not None else None,
     )

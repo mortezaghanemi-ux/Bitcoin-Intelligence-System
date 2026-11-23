@@ -1,0 +1,61 @@
+# Strategy profiles. Each profile switches rule layers on or off so the
+# backtest can measure them one at a time. `active` is the profile the
+# live trader uses. Change `active` only after a backtest shows an edge.
+#
+# Layers (all optional):
+#   execution_timeframe / stop_atr_multiplier ... where levels are built
+#   allowed_regimes / minimum_adx / require_regime_direction ... regime
+#   higher_timeframe_bias / maximum_pullback_atr ... entry location
+#   blackout_windows ... scheduled-event pauses
+
+active: baseline
+
+profiles:
+  baseline:
+    description: Original rules, 5m levels.
+
+  h1_base:
+    description: Same rules, levels built from the 1h timeframe.
+    execution_timeframe: 1h
+
+  h1_regime:
+    description: 1h levels, only in a trending 4h regime.
+    execution_timeframe: 1h
+    allowed_regimes: [TRENDING]
+    regime_timeframe: 4h
+
+  h1_regime_di:
+    description: Trending 4h regime and DI direction agrees.
+    execution_timeframe: 1h
+    allowed_regimes: [TRENDING]
+    regime_timeframe: 4h
+    require_regime_direction: true
+
+  h1_htf:
+    description: 1h levels, 4h direction must agree.
+    execution_timeframe: 1h
+    higher_timeframe_bias: 4h
+
+  h1_pullback:
+    description: 1h levels, enter only near EMA20 (pullback).
+    execution_timeframe: 1h
+    maximum_pullback_atr: 1.0
+
+  h1_trend_pullback:
+    description: Trending regime plus 4h agreement plus pullback entry.
+    execution_timeframe: 1h
+    allowed_regimes: [TRENDING]
+    regime_timeframe: 4h
+    require_regime_direction: true
+    higher_timeframe_bias: 4h
+    maximum_pullback_atr: 1.0
+
+  h1_trend_pullback_wide:
+    description: As above with a wider 2 ATR stop.
+    execution_timeframe: 1h
+    allowed_regimes: [TRENDING]
+    regime_timeframe: 4h
+    require_regime_direction: true
+    higher_timeframe_bias: 4h
+    maximum_pullback_atr: 1.0
+    stop_atr_multiplier: 2.0
