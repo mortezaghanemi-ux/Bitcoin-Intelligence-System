@@ -1,11 +1,19 @@
 {
   "status": "COMPLETED",
-  "generated_at": "2026-11-23T12:25:16.778917+00:00",
+  "generated_at": "2026-11-23T13:41:53.181530+00:00",
   "pair": "XBTUSD",
   "profile": {
     "allowed_regimes": [],
     "blackout_windows": [],
+    "breakout_channel": 20,
+    "breakout_stop_atr": 2.0,
+    "breakout_targets_r": [
+      1.5,
+      2.0,
+      3.0
+    ],
     "description": "Original rules, 5m levels.",
+    "engine": "confluence",
     "execution_timeframe": "5m",
     "fill_timeframe": "5m",
     "higher_timeframe_bias": null,

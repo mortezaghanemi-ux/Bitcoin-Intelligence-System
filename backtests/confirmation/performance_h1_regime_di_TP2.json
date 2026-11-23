@@ -1,13 +1,21 @@
 {
   "status": "COMPLETED",
-  "generated_at": "2026-11-23T12:25:25.968049+00:00",
+  "generated_at": "2026-11-23T13:42:07.655155+00:00",
   "pair": "XBTUSD",
   "profile": {
     "allowed_regimes": [
       "TRENDING"
     ],
     "blackout_windows": [],
+    "breakout_channel": 20,
+    "breakout_stop_atr": 2.0,
+    "breakout_targets_r": [
+      1.5,
+      2.0,
+      3.0
+    ],
     "description": "Trending 4h regime and DI direction agrees.",
+    "engine": "confluence",
     "execution_timeframe": "1h",
     "fill_timeframe": "5m",
     "higher_timeframe_bias": null,
