@@ -90,21 +90,23 @@ def shifted(result, days, pnl_scale=1.0):
     return result
 
 
-def test_combine_adds_profit_across_stretches():
+def test_combine_compounds_across_stretches():
     first = make_result([10, -5, 10])
     second = shifted(make_result([20, -5]), days=30)
 
     merged = combine_results([second, first])
 
     assert [t["net_pnl"] for t in merged["trades"]] == [10, -5, 10, 20, -5]
-    assert merged["summary"]["final_equity"] == pytest.approx(10030.0)
+    assert merged["summary"]["final_equity"] == pytest.approx(
+        10015.0 * (10015.0 / 10000.0)
+    )
     assert merged["summary"]["stretches"] == 2
 
     equities = [p["equity"] for p in merged["equity_curve"]]
 
     # Second stretch continues from the first one's final equity.
     assert equities[3] == pytest.approx(10015.0)
-    assert equities[-1] == pytest.approx(10030.0)
+    assert equities[-1] == pytest.approx(10015.0 * 10015.0 / 10000.0)
 
     with pytest.raises(SegmentError):
         combine_results([])
@@ -168,3 +170,11 @@ def test_evaluate_shards_command_end_to_end(tmp_path):
             inputs=str(tmp_path / "in"), profile="nope", target=2,
             holdout_before=None, output_dir=str(tmp_path / "out"),
         )
+
+
+def test_combine_never_goes_negative_after_repeated_losses():
+    losing = [shifted(make_result([-9000]), days=30 * i) for i in range(4)]
+
+    merged = combine_results(losing)
+
+    assert min(p["equity"] for p in merged["equity_curve"]) > 0

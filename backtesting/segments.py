@@ -148,9 +148,10 @@ def combine_results(
 ) -> dict[str, Any]:
     """Merge per-stretch backtests into one chronological result.
 
-    Each stretch starts again from the same initial equity, so profits
-    are added rather than compounded across holes. The equity curve is
-    shifted by the profit made before each stretch.
+    Each stretch was simulated from the same initial equity. The equity
+    curve is chained by multiplying each stretch's curve by the equity
+    reached before it, so it compounds and can never go below zero.
+    Trade-level statistics keep the per-stretch dollar amounts.
     """
 
     if not results:
@@ -163,23 +164,22 @@ def combine_results(
 
     trades: list[dict[str, Any]] = []
     curve: list[dict[str, Any]] = []
-    offset = 0.0
+    running = float(initial_equity)
 
     for result in ordered:
         start_equity = float(result["equity_curve"][0]["equity"])
+        factor = running / start_equity
 
         for point in result["equity_curve"]:
             curve.append(
                 {
                     "timestamp": point["timestamp"],
-                    "equity": initial_equity
-                    + offset
-                    + (float(point["equity"]) - start_equity),
+                    "equity": float(point["equity"]) * factor,
                 }
             )
 
         trades.extend(result["trades"])
-        offset += float(result["equity_curve"][-1]["equity"]) - start_equity
+        running = curve[-1]["equity"]
 
     trades.sort(key=lambda t: t["decision_time"])
     first = ordered[0]
@@ -190,14 +190,16 @@ def combine_results(
         "execution": first.get("execution", {}),
         "summary": {
             "initial_equity": initial_equity,
-            "final_equity": initial_equity + offset,
+            "final_equity": running,
             "stretches": len(ordered),
         },
         "trades": trades,
         "equity_curve": curve,
         "limitations": list(first.get("limitations", []))
         + [
-            "Results are merged from separate continuous stretches; "
-            "each starts from the same equity and profits are added."
+            "Results are merged from separate continuous stretches. "
+            "The equity curve compounds from one stretch to the next; "
+            "trade profits are counted at the same starting size in "
+            "every stretch."
         ],
     }
