@@ -639,3 +639,5 @@ tbody tr:hover {
     line-height: 1.8;
 }
 .signal-value[data-tone] { direction: rtl; text-align: right; }
+
+[hidden] { display: none !important; }
