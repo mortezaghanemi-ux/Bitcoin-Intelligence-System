@@ -35,7 +35,7 @@ def call(profile, direction="BULLISH", directions=None, candles=None):
 def test_shipped_profiles_load_and_are_valid():
     profiles, active = load_profiles()
 
-    assert active == "h1_base"
+    assert active == "h4_base"
     assert {"baseline", "h1_base", "h1_regime"} <= set(profiles)
     assert profiles["h1_base"].execution_timeframe == "1h"
 
@@ -146,13 +146,13 @@ def test_live_pipeline_uses_the_active_profile(tmp_path):
         config_dir=copy,
     )
 
-    # Shipped configuration: h1_base is active.
-    assert pipeline.engine.profile.name == "h1_base"
-    assert pipeline.engine.execution_timeframe == "1h"
+    # Shipped configuration: h4_base is active.
+    assert pipeline.engine.profile.name == "h4_base"
+    assert pipeline.engine.execution_timeframe == "4h"
 
     text = (copy / "strategy_profiles.yaml").read_text()
     (copy / "strategy_profiles.yaml").write_text(
-        text.replace("active: h1_base", "active: baseline")
+        text.replace("active: h4_base", "active: baseline")
     )
 
     baseline = TradingPipeline(
