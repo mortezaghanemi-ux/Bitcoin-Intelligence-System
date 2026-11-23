@@ -589,16 +589,31 @@ def _is_dashboard_signal(
     return True
 
 
+def _active_profile_name() -> str | None:
+    """Name of the strategy profile the live trader uses."""
+
+    try:
+        from trader.strategy_profile import load_profiles
+
+        return load_profiles()[1]
+    except Exception:
+        return None
+
+
 def load_trading_signals(
     *,
     history_path: str | Path | None = None,
     limit: int = DEFAULT_SIGNAL_LIMIT,
     now: datetime | None = None,
+    profile_name: str | None = None,
 ) -> dict[str, Any]:
     """
     Load actionable trading signals only.
 
-    Rejected signals and NO_TRADE records are excluded.
+    Rejected signals and NO_TRADE records are excluded. When
+    profile_name is given, only signals issued by that strategy
+    profile are kept (older signals came from rules that are no
+    longer active).
     """
 
     limit = _validate_limit(
@@ -627,6 +642,17 @@ def load_trading_signals(
 
         if not _is_dashboard_signal(record):
             continue
+
+        if profile_name is not None:
+            parameters = record.get("parameters")
+            issued_by = (
+                parameters.get("profile")
+                if isinstance(parameters, dict)
+                else None
+            )
+
+            if issued_by != profile_name:
+                continue
 
         try:
             timestamp = _parse_utc_timestamp(
@@ -826,6 +852,7 @@ def load_dashboard_data(
         history_path=history_path,
         limit=signal_limit,
         now=checked_at,
+        profile_name=_active_profile_name(),
     )
 
     performance = load_performance(
