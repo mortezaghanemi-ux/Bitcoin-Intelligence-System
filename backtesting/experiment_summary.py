@@ -36,8 +36,9 @@ def load_reports(directory: str | Path) -> list[dict[str, Any]]:
 def summarize(reports: list[dict[str, Any]]) -> str:
     header = (
         "| Profile | Target | Trades | Win % | PF | OOS trades | OOS PF "
-        "| Folds + | Return % | Max DD % | Gate |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "| Holdout trades | Holdout PF | Folds + | Return % | Max DD % "
+        "| Gate |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
     rows = []
 
@@ -55,7 +56,8 @@ def summarize(reports: list[dict[str, Any]]) -> str:
 
         rows.append(
             "| {profile} | {target} | {trades} | {win} | {pf} | {ot} "
-            "| {opf} | {folds}/{count} | {ret} | {dd} | {gate} |".format(
+            "| {opf} | {ht} | {hpf} | {folds}/{count} | {ret} | {dd} "
+            "| {gate} |".format(
                 profile=report.get("profile", {}).get("name", "baseline"),
                 target=report.get("target"),
                 trades=overall["trades"],
@@ -63,6 +65,8 @@ def summarize(reports: list[dict[str, Any]]) -> str:
                 pf=_fmt(overall["profit_factor"]),
                 ot=out["trades"],
                 opf=_fmt(out["profit_factor"]),
+                ht=(report.get("holdout") or {}).get("trades", "-"),
+                hpf=_fmt((report.get("holdout") or {}).get("profit_factor")),
                 folds=walk.get("profitable_folds", 0),
                 count=walk.get("fold_count", 0),
                 ret=_fmt(risk.get("total_return_pct"), 1),

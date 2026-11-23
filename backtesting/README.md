@@ -86,3 +86,14 @@ above on GitHub's servers: it downloads Kraken's quarterly OHLCVT files,
 extracts the XBTUSD 5-minute file, runs `import-history` and `backtest`,
 and saves `data/backtests/` to the `runtime-data` branch. The dashboard
 shows the result after the next normal run.
+
+### Multi-year history in continuous stretches
+
+Kraken's file has holes. `import-history --segmented --since 2020-01-01`
+keeps every continuous stretch (default at least 14 days) in its own
+folder plus `segments.json`. `backtest-shard` replays a profile over one
+date range across all stretches and `evaluate-shards` merges the shards
+and scores them. Trades before `--holdout-before` form a separate
+confirmation set that must also pass the activation gate. The
+**Bitcoin Intelligence Strategy Confirmation** workflow runs all of this
+on GitHub.
