@@ -70,14 +70,14 @@ class TradingPipeline:
         rejection_store: SignalRejectionStore | None = None,
     ) -> None:
 
+        self._config_dir = Path(
+            config_dir
+            if config_dir is not None
+            else self._default_config_dir()
+        )
+
         try:
-            self.config = load_config(
-                config_dir=(
-                    config_dir
-                    if config_dir is not None
-                    else self._default_config_dir()
-                )
-            )
+            self.config = load_config(config_dir=self._config_dir)
 
         except Exception as exc:
             raise TradingPipelineError(
@@ -173,6 +173,32 @@ class TradingPipeline:
             "confidence",
             {},
         )
+
+        maximum_leverage = float(risk.get("maximum_leverage", 2))
+
+        # The strategy profile marked "active" selects the live rules
+        # (config/strategy_profiles.yaml). "baseline" keeps the original
+        # configuration below.
+        from trader.strategy_profile import (
+            StrategyProfileError,
+            get_profile,
+        )
+
+        try:
+            profile = get_profile(
+                path=self._config_dir / "strategy_profiles.yaml"
+            )
+        except StrategyProfileError as exc:
+            raise TradingPipelineError(
+                f"Invalid strategy profile configuration: {exc}"
+            ) from exc
+
+        if profile.name != "baseline":
+            return TradingSignalEngine(
+                minimum_candles=30,
+                maximum_leverage=maximum_leverage,
+                profile=profile,
+            )
 
         return TradingSignalEngine(
             minimum_candles=30,

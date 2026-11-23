@@ -1,6 +1,9 @@
 # Strategy profiles. Each profile switches rule layers on or off so the
 # backtest can measure them one at a time. `active` is the profile the
-# live trader uses. Change `active` only after a backtest shows an edge.
+# live trader uses. No profile has passed the activation gate yet (see
+# the confirmation results). h1_base is active because its 1h levels
+# lost far less than baseline's 5m levels in every test; it is still
+# shown with a "no proven edge" warning.
 #
 # Layers (all optional):
 #   execution_timeframe / stop_atr_multiplier ... where levels are built
@@ -8,7 +11,7 @@
 #   higher_timeframe_bias / maximum_pullback_atr ... entry location
 #   blackout_windows ... scheduled-event pauses
 
-active: baseline
+active: h1_base
 
 profiles:
   baseline:
