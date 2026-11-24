@@ -1,0 +1,101 @@
+{
+  "generated_at": "2026-11-24T10:39:47.536451+00:00",
+  "metadata": {
+    "analysis_timestamp": "2026-11-24T10:39:47.536451+00:00",
+    "asset": "BTC",
+    "candles_analyzed": 764,
+    "forecast_horizon_days": 7,
+    "forecast_id": "BTC-20261124T103947-7D-heuristic-v1",
+    "forecast_timestamp": "2026-11-24T10:39:47.536451+00:00",
+    "model_version": "heuristic-v1",
+    "sources": [
+      "kraken"
+    ],
+    "statistically_calibrated": false
+  },
+  "payload": {
+    "forecast": {
+      "analysis_timestamp": "2026-11-24T10:39:47.536451+00:00",
+      "asset": "BTC",
+      "confidence_score": 83.57,
+      "forecast_horizon": {
+        "days": 7,
+        "end": "2026-12-01T10:39:47.536451+00:00",
+        "start": "2026-11-24T10:39:47.536451+00:00"
+      },
+      "forecast_id": "BTC-20261124T103947-7D-heuristic-v1",
+      "forecast_timestamp": "2026-11-24T10:39:47.536451+00:00",
+      "influencing_factors": [
+        {
+          "component": "structure",
+          "direction": "BEARISH",
+          "score": -100.0
+        },
+        {
+          "component": "liquidity",
+          "direction": "BEARISH",
+          "score": -100.0
+        },
+        {
+          "component": "trend",
+          "direction": "BEARISH",
+          "score": -73.2235
+        },
+        {
+          "component": "zones",
+          "direction": "BEARISH",
+          "score": -60.0
+        },
+        {
+          "component": "regime",
+          "direction": "BEARISH",
+          "score": -25.0
+        }
+      ],
+      "input_metadata": {
+        "agreement_ratio": 1.0,
+        "candles_analyzed": 764,
+        "confluence_score": -74.7171,
+        "sources": [
+          "kraken"
+        ]
+      },
+      "last_candle_close_time": "2026-11-24T10:00:00+00:00",
+      "limitations": [
+        "Probabilities are heuristic estimates, not statistically calibrated probabilities.",
+        "Forecasts are estimates and do not guarantee future market outcomes.",
+        "Forecast quality requires evaluation against completed market outcomes.",
+        "This engine does not generate trading orders.",
+        "This engine does not execute trades.",
+        "This engine does not persist or overwrite forecast history."
+      ],
+      "market_condition": {
+        "direction": "BEARISH",
+        "regime": "TRANSITIONAL",
+        "trend_strength": "MODERATE"
+      },
+      "market_price": 59918.7,
+      "model": {
+        "method": "weighted_confluence_heuristic",
+        "name": "Bitcoin Heuristic Forecast Engine",
+        "statistically_calibrated": false,
+        "version": "heuristic-v1"
+      },
+      "probabilities": {
+        "BEARISH": 64.38,
+        "BULLISH": 16.56,
+        "NEUTRAL": 19.06
+      },
+      "risk_factors": [
+        "Market regime may increase forecast uncertainty: TRANSITIONAL."
+      ],
+      "status": "SUCCESS"
+    },
+    "interpretation_notice": "Forecast probabilities are heuristic estimates and are not statistically calibrated unless explicitly established by independent evaluation."
+  },
+  "report_id": "forecast-20261124T103947536451Z-b675b6187319",
+  "report_type": "forecast",
+  "schema_version": 1,
+  "source": "forecast.engine",
+  "status": "SUCCESS"
+}
